@@ -1,0 +1,10 @@
+:root {
+  --accent: #2f6fed;
+  font-family: system-ui, -apple-system, 'Segoe UI', sans-serif;
+  color: #1c1c1e;
+  background: #f7f8fa;
+}
+
+body {
+  margin: 0;
+}
