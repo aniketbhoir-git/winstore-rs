@@ -61,3 +61,7 @@ elevation). `tier:any` issues are reserved for community contributors on cheaper
   mapping, repositories (packages with TTL, installs with guarded state transitions,
   sources, settings, operation_log).
 - `ui/` — Vite + Svelte + TS skeleton; `invoke('app_version')` is the only command so far.
+
+## Project skills
+- `winget-executor` — winget CLI facts, output/exit-code parsing, cancellation, fake-winget tests for #4 and #6 — `.claude/skills/winget-executor/SKILL.md`
+- `store-work-resume` — load context and follow the workflow to resume one issue ("start issue N") — `.claude/skills/store-work-resume/SKILL.md`

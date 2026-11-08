@@ -40,6 +40,7 @@ implementation issue is a paste-ready prompt. Start here:
 - [`CONTRIBUTING.md`](CONTRIBUTING.md)
 - [`docs/CONTRIBUTING-WITH-LLM.md`](docs/CONTRIBUTING-WITH-LLM.md)
 - [`docs/SPEC.md`](docs/SPEC.md) — the LLM hand-off spec (safe to paste into any model)
+- [`docs/SKILLS.md`](docs/SKILLS.md) — agent skills that help on this codebase
 - [Open issues](https://github.com/aniketbhoir-git/winstore-rs/issues) — pick one labelled `tier:any` or `tier:max`; [`docs/ISSUE-BACKLOG.md`](docs/ISSUE-BACKLOG.md) has the same list
 
 ## License
