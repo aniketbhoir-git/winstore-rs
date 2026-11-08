@@ -27,6 +27,10 @@ anyone (on any model tier) can pick up. See `docs/ISSUE-BACKLOG.md`.
 
 Rust · Tauri 2 · Svelte/TypeScript · SQLite · tokio · windows-rs
 
+## Development
+
+Prerequisites: Rust stable (MSVC toolchain), Node 22+, the Visual Studio Build Tools "Desktop development with C++" workload, and the WebView2 runtime. Run `npm install` in `ui/`, then `npm run tauri dev` from `ui/` to start the app with hot reload, or `npm run build` in `ui/` followed by `cargo run` in `src-tauri/`. From `src-tauri/`, check your work with `cargo test`, `cargo clippy --all-targets -- -D warnings` and `cargo fmt --all -- --check`.
+
 ## Contributing
 
 Contributors can donate their **LLM tokens** instead of (or in addition to) hours: each

@@ -1,0 +1,40 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: ui/package-lock.json
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy,rustfmt
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+      - name: Build UI
+        working-directory: ui
+        run: |
+          npm ci
+          npm run build
+      - name: Format
+        working-directory: src-tauri
+        run: cargo fmt --all -- --check
+      - name: Clippy
+        working-directory: src-tauri
+        run: cargo clippy --all-targets --all-features -- -D warnings
+      - name: Build
+        working-directory: src-tauri
+        run: cargo build --locked
+      - name: Test
+        working-directory: src-tauri
+        run: cargo test --locked
