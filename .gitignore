@@ -1,0 +1,20 @@
+# Rust
+src-tauri/target/
+
+# Node
+ui/node_modules/
+ui/dist/
+
+# Tauri generated
+src-tauri/gen/schemas/
+
+# Local databases and logs
+*.db
+*.db-wal
+*.db-shm
+
+# Editors / OS
+.vscode/
+.idea/
+Thumbs.db
+.DS_Store
