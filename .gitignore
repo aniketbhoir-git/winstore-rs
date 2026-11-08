@@ -1,5 +1,5 @@
 # Rust
-src-tauri/target/
+src-tauri/target*/
 
 # Node
 ui/node_modules/
