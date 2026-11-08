@@ -19,7 +19,7 @@ fn app_version() -> &'static str {
 }
 
 fn db_path() -> Option<PathBuf> {
-    ProjectDirs::from("app", "store", "Store").map(|d| d.data_dir().join("store").join("store.db"))
+    ProjectDirs::from("app", "store", "Store").map(|d| d.data_dir().join("store.db"))
 }
 
 pub fn run() {
