@@ -44,6 +44,8 @@ pub struct HttpPolicy {
     pub base_delay: Duration,
     /// Upper bound for one backoff delay, including a server `Retry-After`.
     pub max_delay: Duration,
+    /// Largest response body accepted; a bigger one maps to `SourceUnavailable`.
+    pub max_body_bytes: usize,
 }
 
 impl Default for HttpPolicy {
@@ -54,6 +56,7 @@ impl Default for HttpPolicy {
             max_attempts: 3,
             base_delay: Duration::from_millis(500),
             max_delay: Duration::from_secs(10),
+            max_body_bytes: 8 * 1024 * 1024,
         }
     }
 }
@@ -103,6 +106,8 @@ impl WingetRepoSource {
         }
         let client = Client::builder()
             .user_agent(user_agent())
+            // Redirects must stay on HTTPS too; plain HTTP only for a loopback base URL.
+            .https_only(!loopback)
             .connect_timeout(policy.connect_timeout)
             .timeout(policy.request_timeout)
             .build()
@@ -128,8 +133,13 @@ impl WingetRepoSource {
     }
 
     /// GET with timeout, retry on transport errors, 429 and 5xx, and exponential backoff.
-    /// A 404 maps to `PackageNotFound(not_found)`.
-    async fn get_json<T: DeserializeOwned>(&self, url: Url, not_found: &str) -> AppResult<T> {
+    /// A 404 maps to `PackageNotFound(id)` when `not_found` is `Some(id)` (detail lookups),
+    /// otherwise to `SourceUnavailable`. Other 4xx statuses are `SourceUnavailable`, not retried.
+    async fn get_json<T: DeserializeOwned>(
+        &self,
+        url: Url,
+        not_found: Option<&str>,
+    ) -> AppResult<T> {
         let attempts = self.policy.max_attempts.max(1);
         let mut attempt = 1;
         loop {
@@ -148,7 +158,7 @@ impl WingetRepoSource {
         }
     }
 
-    async fn try_once<T: DeserializeOwned>(&self, url: Url, not_found: &str) -> Attempt<T> {
+    async fn try_once<T: DeserializeOwned>(&self, url: Url, not_found: Option<&str>) -> Attempt<T> {
         let response = match self
             .client
             .get(url)
@@ -166,6 +176,8 @@ impl WingetRepoSource {
         };
         let status = response.status();
         if status == StatusCode::TOO_MANY_REQUESTS {
+            // Only the delay-seconds form is honoured; an HTTP-date `Retry-After` falls back
+            // to the normal exponential backoff.
             let retry_after = response
                 .headers()
                 .get(header::RETRY_AFTER)
@@ -181,23 +193,45 @@ impl WingetRepoSource {
             return Attempt::Retry(self.unavailable(&format!("server error {status}")), None);
         }
         if status == StatusCode::NOT_FOUND {
-            return Attempt::Done(Err(AppError::PackageNotFound(not_found.to_string())));
+            return Attempt::Done(Err(match not_found {
+                Some(id) => AppError::PackageNotFound(id.to_string()),
+                None => self.unavailable("endpoint not found (404)"),
+            }));
         }
         if !status.is_success() {
             return Attempt::Done(Err(self.unavailable(&format!("unexpected status {status}"))));
         }
-        let body = match response.bytes().await {
-            Ok(b) => b,
-            Err(e) if e.is_timeout() => {
-                return Attempt::Retry(AppError::Http("catalog request timed out".into()), None)
-            }
-            Err(e) => {
-                return Attempt::Retry(
-                    AppError::Http(format!("catalog response failed: {e}")),
-                    None,
-                )
-            }
+        let cap = self.policy.max_body_bytes;
+        let too_large = || {
+            Attempt::Done(Err(
+                self.unavailable(&format!("response larger than {cap} bytes"))
+            ))
         };
+        if response.content_length().is_some_and(|n| n > cap as u64) {
+            return too_large();
+        }
+        let mut response = response;
+        let mut body = Vec::new();
+        loop {
+            match response.chunk().await {
+                Ok(Some(chunk)) => {
+                    if body.len() + chunk.len() > cap {
+                        return too_large();
+                    }
+                    body.extend_from_slice(&chunk);
+                }
+                Ok(None) => break,
+                Err(e) if e.is_timeout() => {
+                    return Attempt::Retry(AppError::Http("catalog request timed out".into()), None)
+                }
+                Err(e) => {
+                    return Attempt::Retry(
+                        AppError::Http(format!("catalog response failed: {e}")),
+                        None,
+                    )
+                }
+            }
+        }
         Attempt::Done(
             serde_json::from_slice(&body)
                 .map_err(|e| self.unavailable(&format!("unreadable catalog response ({e})"))),
@@ -213,7 +247,7 @@ impl WingetRepoSource {
         url.query_pairs_mut()
             .append_pair("query", &text)
             .append_pair("take", &query.fetch_limit().to_string());
-        let page: SearchResponse = self.get_json(url, &text).await?;
+        let page: SearchResponse = self.get_json(url, None).await?;
         Ok(page
             .packages
             .into_iter()
@@ -229,7 +263,7 @@ impl WingetRepoSource {
             .filter(|(p, n)| !p.is_empty() && !n.is_empty())
             .ok_or_else(not_found)?;
         let url = self.url(&["v2", "packages", publisher, name]);
-        let res: DetailResponse = self.get_json(url, package_id).await?;
+        let res: DetailResponse = self.get_json(url, Some(package_id)).await?;
         res.package
             .into_detail()
             .ok_or_else(|| self.unavailable(&format!("incomplete catalog entry for {package_id}")))

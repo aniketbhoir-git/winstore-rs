@@ -72,6 +72,9 @@ impl SearchQuery {
     }
 
     /// How many results a source should return so the requested page can be filled.
+    ///
+    /// Capped at `MAX_PAGE_SIZE`: only the first 100 merged results per source are
+    /// reachable, so pages past that point come back short or empty.
     pub fn fetch_limit(&self) -> u32 {
         self.page
             .saturating_add(1)

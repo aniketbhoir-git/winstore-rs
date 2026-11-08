@@ -25,12 +25,14 @@ pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 ///
 /// `package_id` arguments are source-local ids (the part after `{source}/` in a `PackageId`).
 pub trait CatalogSource: Send + Sync {
+    /// Which catalog this adapter serves; also the prefix of every `PackageId` it returns.
     fn kind(&self) -> SourceKind;
 
     fn display_name(&self) -> &str {
         self.kind().display_name()
     }
 
+    /// What this source supports; the coordinator only searches sources with `search`.
     fn capabilities(&self) -> SourceCapabilities;
 
     /// Returns at most `query.fetch_limit()` summaries, best match first.
@@ -39,6 +41,7 @@ pub trait CatalogSource: Send + Sync {
         query: &'a SearchQuery,
     ) -> BoxFuture<'a, AppResult<Vec<PackageSummary>>>;
 
+    /// Full detail for a source-local id; `PackageNotFound` when the catalog has no such id.
     fn get_detail<'a>(&'a self, package_id: &'a str) -> BoxFuture<'a, AppResult<PackageDetail>>;
 
     fn get_featured(&self, _limit: u32) -> BoxFuture<'_, AppResult<Vec<PackageSummary>>> {
@@ -76,6 +79,7 @@ impl Catalog {
         }
     }
 
+    /// The sources this coordinator queries, in priority order (earlier wins on duplicates).
     pub fn sources(&self) -> &[Arc<dyn CatalogSource>] {
         &self.sources
     }
@@ -115,6 +119,7 @@ impl Catalog {
         let mut results: Vec<Option<AppResult<Vec<PackageSummary>>>> =
             targets.iter().map(|_| None).collect();
         let mut tasks = JoinSet::new();
+        let mut task_index = HashMap::new();
         for (i, src) in targets.iter().enumerate() {
             let key = (src.kind(), text.clone(), limit);
             if let Some(hit) = self.cached_query(&key, now) {
@@ -123,16 +128,25 @@ impl Catalog {
             }
             let src = Arc::clone(src);
             let q = query.clone();
-            tasks.spawn(async move { (i, key, src.search(&q).await) });
+            let handle = tasks.spawn(async move { (key, src.search(&q).await) });
+            task_index.insert(handle.id(), i);
         }
-        while let Some(joined) = tasks.join_next().await {
-            let (i, key, result) = joined
-                .map_err(|e| AppError::SourceUnavailable(format!("search task failed: {e}")))?;
-            if let Ok(rows) = &result {
-                self.persist_summaries(rows, now).await;
-                self.store_query(key, now, rows.clone());
+        while let Some(joined) = tasks.join_next_with_id().await {
+            match joined {
+                Ok((id, (key, result))) => {
+                    if let Ok(rows) = &result {
+                        self.persist_summaries(rows, now).await;
+                        self.store_query(key, now, rows.clone());
+                    }
+                    results[task_index[&id]] = Some(result);
+                }
+                // A panicked or aborted source task counts as that source failing.
+                Err(e) => {
+                    results[task_index[&e.id()]] = Some(Err(AppError::SourceUnavailable(format!(
+                        "search task failed: {e}"
+                    ))));
+                }
             }
-            results[i] = Some(result);
         }
 
         let mut per_source = Vec::with_capacity(targets.len());
@@ -179,8 +193,9 @@ impl Catalog {
                 }
                 Ok(detail)
             }
-            Err(e) if e.retryable() => {
-                // Offline or rate limited: a stale cached detail beats an error.
+            Err(e) => {
+                // Same rule as `search`: on any source error, a cached detail beats an error.
+                tracing::warn!(%id, "catalog detail failed: {e}");
                 match self.cached_detail(kind, &local, None).await {
                     Some(detail) => {
                         tracing::warn!(%id, "serving stale cached detail: {e}");
@@ -189,7 +204,6 @@ impl Catalog {
                     None => Err(e),
                 }
             }
-            Err(e) => Err(e),
         }
     }
 
@@ -254,9 +268,9 @@ impl Catalog {
             if self.ttl_secs == 0 {
                 return None;
             }
-            packages::get_fresh_summary(pool, kind, local, self.ttl_secs, now)
+            return packages::get_fresh_detail(pool, kind, local, self.ttl_secs, now)
                 .await
-                .ok()??;
+                .ok()?;
         }
         packages::get_detail(pool, kind, local).await.ok()?
     }
@@ -274,6 +288,7 @@ mod tests {
         kind: SourceKind,
         rows: Option<Vec<PackageSummary>>,
         calls: AtomicUsize,
+        detail_calls: AtomicUsize,
     }
 
     impl FakeSource {
@@ -282,6 +297,7 @@ mod tests {
                 kind,
                 rows: Some(rows),
                 calls: AtomicUsize::new(0),
+                detail_calls: AtomicUsize::new(0),
             })
         }
 
@@ -290,6 +306,7 @@ mod tests {
                 kind,
                 rows: None,
                 calls: AtomicUsize::new(0),
+                detail_calls: AtomicUsize::new(0),
             })
         }
     }
@@ -323,13 +340,57 @@ mod tests {
             &'a self,
             package_id: &'a str,
         ) -> BoxFuture<'a, AppResult<PackageDetail>> {
+            self.detail_calls.fetch_add(1, Ordering::SeqCst);
             let kind = self.kind;
-            Box::pin(async move { Ok(fixtures::detail(kind, package_id, "Detail")) })
+            let up = self.rows.is_some();
+            Box::pin(async move {
+                if up {
+                    Ok(fixtures::detail(kind, package_id, "Detail"))
+                } else {
+                    Err(AppError::SourceUnavailable("down".into()))
+                }
+            })
         }
     }
 
     fn row(kind: SourceKind, id: &str, name: &str) -> PackageSummary {
         fixtures::summary(kind, id, name)
+    }
+
+    #[tokio::test]
+    async fn search_refresh_does_not_make_an_old_detail_fresh() {
+        let pool = crate::db::repo::test_pool().await;
+        let old = fixtures::detail(SourceKind::Scoop, "b", "B");
+        packages::upsert_detail(&pool, &old, now_unix() - 10_000)
+            .await
+            .unwrap();
+        let src = FakeSource::ok(SourceKind::Scoop, vec![old.summary.clone()]);
+        let catalog = Catalog::new(vec![src.clone()], Some(pool), 60);
+        // The search upserts the summary row with a current fetched_at.
+        catalog.search(&SearchQuery::new("b")).await.unwrap();
+        catalog.get_detail(&old.summary.id).await.unwrap();
+        assert_eq!(src.detail_calls.load(Ordering::SeqCst), 1);
+        // Now the detail itself is fresh and served from the cache.
+        catalog.get_detail(&old.summary.id).await.unwrap();
+        assert_eq!(src.detail_calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn detail_serves_stale_cache_when_source_is_down() {
+        let pool = crate::db::repo::test_pool().await;
+        let old = fixtures::detail(SourceKind::Scoop, "b", "B");
+        packages::upsert_detail(&pool, &old, now_unix() - 10_000)
+            .await
+            .unwrap();
+        let down = FakeSource::failing(SourceKind::Scoop);
+        let catalog = Catalog::new(vec![down.clone()], Some(pool), 60);
+        assert_eq!(catalog.get_detail(&old.summary.id).await.unwrap(), old);
+        assert_eq!(down.detail_calls.load(Ordering::SeqCst), 1);
+        let err = catalog
+            .get_detail(&PackageId::new(SourceKind::Scoop, "missing"))
+            .await
+            .unwrap_err();
+        assert_eq!(err.code(), "source_unavailable");
     }
 
     #[tokio::test]

@@ -18,6 +18,7 @@ fn fast_policy() -> HttpPolicy {
         max_attempts: 3,
         base_delay: Duration::from_millis(1),
         max_delay: Duration::from_millis(5),
+        ..HttpPolicy::default()
     }
 }
 
@@ -214,6 +215,97 @@ async fn server_errors_are_retried() {
 }
 
 #[tokio::test]
+async fn transient_503_then_200_succeeds_after_retry() {
+    let server = MockServer::start_async().await;
+    let down = server
+        .mock_async(|when, then| {
+            when.method(GET).path("/v2/packages");
+            then.status(503);
+        })
+        .await;
+    // Long first backoff so the mock can be swapped between attempts.
+    let policy = HttpPolicy {
+        base_delay: Duration::from_millis(400),
+        max_delay: Duration::from_millis(400),
+        ..fast_policy()
+    };
+    let src = source(&server, policy);
+    let q = SearchQuery::new("firefox");
+    let search = src.search(&q);
+    let swap = async {
+        while down.calls_async().await == 0 {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        down.delete_async().await;
+        server
+            .mock_async(|when, then| {
+                when.method(GET).path("/v2/packages");
+                then.status(200).json_body(firefox_page());
+            })
+            .await
+    };
+    let (rows, up) = tokio::join!(search, swap);
+    assert_eq!(rows.unwrap().len(), 2);
+    assert_eq!(up.calls_async().await, 1);
+}
+
+#[tokio::test]
+async fn client_errors_map_to_source_unavailable_without_retry() {
+    for status in [400u16, 403] {
+        let server = MockServer::start_async().await;
+        let mock = server
+            .mock_async(|when, then| {
+                when.method(GET).path("/v2/packages");
+                then.status(status);
+            })
+            .await;
+        let err = source(&server, fast_policy())
+            .search(&SearchQuery::new("vlc"))
+            .await
+            .unwrap_err();
+        assert_eq!(err.code(), "source_unavailable", "{status}");
+        assert_eq!(mock.calls_async().await, 1, "{status}");
+    }
+}
+
+#[tokio::test]
+async fn search_404_is_source_unavailable_not_package_not_found() {
+    let server = MockServer::start_async().await;
+    server
+        .mock_async(|when, then| {
+            when.method(GET).path("/v2/packages");
+            then.status(404);
+        })
+        .await;
+    let err = source(&server, fast_policy())
+        .search(&SearchQuery::new("vlc"))
+        .await
+        .unwrap_err();
+    assert_eq!(err.code(), "source_unavailable");
+}
+
+#[tokio::test]
+async fn oversized_body_maps_to_source_unavailable() {
+    let server = MockServer::start_async().await;
+    server
+        .mock_async(|when, then| {
+            when.method(GET).path("/v2/packages");
+            then.status(200).json_body(firefox_page());
+        })
+        .await;
+    let policy = HttpPolicy {
+        max_body_bytes: 64,
+        ..fast_policy()
+    };
+    let err = source(&server, policy)
+        .search(&SearchQuery::new("firefox"))
+        .await
+        .unwrap_err();
+    assert_eq!(err.code(), "source_unavailable");
+    assert!(err.to_string().contains("larger than 64 bytes"));
+}
+
+#[tokio::test]
 async fn slow_server_maps_to_retryable_http_error() {
     let server = MockServer::start_async().await;
     let mock = server
@@ -308,6 +400,16 @@ async fn coordinator_detail_uses_ttl_cache() {
     let uncached = Catalog::new(vec![src], Some(pool), 0);
     uncached.get_detail(&id).await.unwrap();
     assert_eq!(mock.calls_async().await, 2);
+
+    // Source down: the stale cached detail is served instead of the error.
+    mock.delete_async().await;
+    server
+        .mock_async(|when, then| {
+            when.method(GET).path("/v2/packages/Mozilla/Firefox");
+            then.status(503);
+        })
+        .await;
+    assert_eq!(uncached.get_detail(&id).await.unwrap(), a);
 
     // A source that is not enabled is reported, not guessed.
     let err = uncached
