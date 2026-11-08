@@ -214,14 +214,19 @@ pub fn list_updates_args(accept_agreements: bool) -> Vec<String> {
     a
 }
 
-pub fn pin_args(id: &str, add: bool) -> Vec<String> {
-    s(&[
+pub fn pin_args(id: &str, add: bool, accept_agreements: bool) -> Vec<String> {
+    let mut a = s(&[
         "pin",
         if add { "add" } else { "remove" },
         "--id",
         id,
         "--exact",
-    ])
+    ]);
+    if accept_agreements {
+        // Supported by `pin add` and `pin remove` (checked with --help on winget 1.29).
+        a.push("--accept-source-agreements".into());
+    }
+    a
 }
 
 /// Last line of defence: no code path may hand these flags to winget.
@@ -280,6 +285,9 @@ mod job {
     }
 
     impl ProcessJob {
+        /// Known limitation: the job is assigned after `spawn`, so a grandchild started in that
+        /// window is not in the job (CREATE_SUSPENDED is deliberately not used).
+        ///
         /// `None` when the job cannot be created or the process cannot be assigned
         /// (callers fall back to `taskkill /T /F`).
         pub fn attach(child: &Child) -> Option<ProcessJob> {
@@ -337,25 +345,44 @@ mod job {
 
 use job::ProcessJob;
 
+/// True when the process tree is known to be gone: the Job Object or `taskkill /T /F` worked.
+/// A bare `start_kill` (direct child only) does not count: an elevated installer would keep
+/// running and we must not claim Cancelled (skill rule 6).
+fn tree_killed(job_ok: bool, taskkill_ok: bool) -> bool {
+    job_ok || taskkill_ok
+}
+
 /// Kills the child's process tree. Job Object first, `taskkill /T /F` as fallback.
-/// Returns false when nothing could be killed (for example an elevated child).
+/// Returns false when the tree could not be killed (for example an elevated child).
 async fn kill_tree(child: &mut Child, job: Option<&ProcessJob>) -> bool {
-    if job.is_some_and(ProcessJob::terminate) {
-        return true;
-    }
+    let job_ok = job.is_some_and(ProcessJob::terminate);
+    #[allow(unused_mut)]
+    let mut taskkill_ok = false;
     #[cfg(windows)]
-    if let Some(pid) = child.id() {
-        let mut cmd = Command::new("taskkill");
-        cmd.args(["/PID", &pid.to_string(), "/T", "/F"])
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null());
-        no_window(&mut cmd);
-        if cmd.status().await.is_ok_and(|st| st.success()) {
-            return true;
+    if !job_ok {
+        if let Some(pid) = child.id() {
+            let mut cmd = Command::new("taskkill");
+            cmd.args(["/PID", &pid.to_string(), "/T", "/F"])
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null());
+            no_window(&mut cmd);
+            taskkill_ok = cmd.status().await.is_ok_and(|st| st.success());
         }
     }
-    child.start_kill().is_ok()
+    if tree_killed(job_ok, taskkill_ok) {
+        return true;
+    }
+    // Last resort: kill the direct child only. This is NOT a successful cancel.
+    if child.start_kill().is_ok() {
+        tracing::warn!("only the direct winget process could be killed; its children may live on");
+    }
+    false
+}
+
+/// A cancel only counts if the child did not finish with exit 0 first ("Done wins").
+fn cancel_wins(status: &std::io::Result<std::process::ExitStatus>) -> bool {
+    !matches!(status, Ok(st) if st.code() == Some(0))
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -407,9 +434,13 @@ impl OpCtx {
         )
     }
 
-    /// Progress is lossy-safe (fractions are monotonic), so a full channel drops the event.
+    /// Progress is lossy-safe (fractions are monotonic), so it is dropped when the consumer
+    /// lags. The last free slot is reserved for the terminal event, which is the only sender
+    /// of the final slot, so exactly one terminal event always fits.
     fn progress(&self, stage: OperationStage, fraction: f32, msg: &str) {
-        let _ = self.tx.try_send(self.event(stage, fraction, msg));
+        if self.tx.capacity() > 1 {
+            let _ = self.tx.try_send(self.event(stage, fraction, msg));
+        }
     }
 
     async fn log(&self, level: LogLevel, message: &str, detail: Option<String>) {
@@ -686,7 +717,9 @@ impl WingetCli {
     pub async fn set_pin(&self, package: &PackageId, add: bool) -> AppResult<()> {
         let (id, _) = winget_target(package)?;
         let _permit = self.inner.guard.try_acquire(package)?;
-        let out = self.run_capture(&pin_args(&id, add)).await?;
+        let out = self
+            .run_capture(&pin_args(&id, add, self.inner.options.accept_agreements))
+            .await?;
         out.require_ok(&id)
     }
 }
@@ -803,8 +836,10 @@ where
                     break Ok(st);
                 }
                 if kill_tree(child, job).await {
-                    cancelled = true;
-                    break child.wait().await;
+                    // winget may have exited 0 between try_wait and the kill: Done wins.
+                    let st = child.wait().await;
+                    cancelled = cancel_wins(&st);
+                    break st;
                 }
                 ctx.log(
                     LogLevel::Warn,
@@ -916,11 +951,8 @@ async fn finish(
             .await
         }
     }
-    let _ = tokio::time::timeout(
-        Duration::from_secs(5),
-        ctx.tx.send(ctx.event(stage, fraction, &message)),
-    )
-    .await;
+    // A slot is always free (see `progress`); this only fails if the receiver is gone.
+    let _ = ctx.tx.send(ctx.event(stage, fraction, &message)).await;
     ctx.inner
         .cancels
         .lock()
@@ -1065,8 +1097,8 @@ mod tests {
             remove_args("A.B", "winget", true),
             list_installed_args(true),
             list_updates_args(true),
-            pin_args("A.B", true),
-            pin_args("A.B", false),
+            pin_args("A.B", true, true),
+            pin_args("A.B", false, true),
         ];
         for a in &all {
             never_forbidden(a);
@@ -1078,6 +1110,39 @@ mod tests {
         assert!(has(&all[3], "--disable-interactivity") && has(&all[4], "--include-unknown"));
         assert_eq!(all[5][..3], ["pin", "add", "--id"]);
         assert_eq!(all[6][1], "remove");
+    }
+
+    #[test]
+    fn pin_agreements_flag_only_when_accepted() {
+        assert!(!has(
+            &pin_args("A.B", true, false),
+            "--accept-source-agreements"
+        ));
+        assert!(has(
+            &pin_args("A.B", true, true),
+            "--accept-source-agreements"
+        ));
+        assert!(has(
+            &pin_args("A.B", false, true),
+            "--accept-source-agreements"
+        ));
+    }
+
+    #[test]
+    fn bare_start_kill_is_not_a_cancel() {
+        assert!(tree_killed(true, false));
+        assert!(tree_killed(false, true));
+        assert!(!tree_killed(false, false));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn exit_zero_beats_cancel() {
+        use std::os::windows::process::ExitStatusExt;
+        use std::process::ExitStatus;
+        assert!(!cancel_wins(&Ok(ExitStatus::from_raw(0))));
+        assert!(cancel_wins(&Ok(ExitStatus::from_raw(1))));
+        assert!(cancel_wins(&Err(std::io::Error::other("x"))));
     }
 
     #[test]

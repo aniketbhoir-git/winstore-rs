@@ -699,3 +699,86 @@ async fn operations_are_written_to_operation_log() {
         .expect("final error row");
     assert!(failed.detail.as_deref().unwrap_or("").contains("boom"));
 }
+
+#[tokio::test]
+async fn terminal_event_survives_a_consumer_that_never_drains() {
+    // 600 distinct bar updates overflow the 256-slot channel before anyone reads.
+    let mut script = String::from("out Found Some App [Vendor.SomeApp] Version 1.2.3\n");
+    for i in 1..=600 {
+        script.push_str(&format!("out ██▒▒  {i}.00 MB / 1000 MB\n"));
+    }
+    script.push_str("exit 0\n");
+    let fx = Fx::new(&script);
+    let mut h = fx
+        .cli
+        .install(&pkg("A.B"), &InstallRequest::default())
+        .await
+        .unwrap();
+    // wait for the operation to finish without reading a single event
+    let outcome = tokio::time::timeout(Duration::from_secs(30), &mut h.outcome)
+        .await
+        .expect("operation stalled on a full channel")
+        .unwrap();
+    outcome.unwrap();
+    let mut events = Vec::new();
+    while let Some(e) = h.events.recv().await {
+        events.push(e);
+    }
+    assert!(events.len() <= 256, "{}", events.len());
+    assert_one_terminal_last(&events);
+    assert_eq!(events.last().unwrap().stage, OperationStage::Done);
+    assert_monotonic(&events);
+}
+
+#[tokio::test]
+async fn cancel_racing_a_clean_exit_never_contradicts_itself() {
+    for _ in 0..10 {
+        let fx = Fx::new("exit 0\n");
+        let h = fx
+            .cli
+            .install(&pkg("A.B"), &InstallRequest::default())
+            .await
+            .unwrap();
+        fx.cli.cancel(&h.operation_id).await.unwrap();
+        let (events, outcome) = collect(h).await;
+        assert_one_terminal_last(&events);
+        match outcome {
+            Ok(()) => assert_eq!(events.last().unwrap().stage, OperationStage::Done),
+            Err(AppError::Cancelled) => {
+                assert_eq!(events.last().unwrap().stage, OperationStage::Cancelled)
+            }
+            Err(other) => panic!("{other:?}"),
+        }
+    }
+}
+
+#[tokio::test]
+async fn agreement_flags_on_update_remove_list_and_pin() {
+    let src = "--accept-source-agreements".to_string();
+    let pkg_flag = "--accept-package-agreements".to_string();
+    for accept in [false, true] {
+        let fx = Fx::build("exit 0\n", accept, &[], None);
+        let id = pkg("A.B");
+        collect(fx.cli.update(&id).await.unwrap()).await.1.unwrap();
+        let up = fx.last_argv();
+        collect(fx.cli.remove(&id).await.unwrap()).await.1.unwrap();
+        let rm = fx.last_argv();
+        fx.cli.list_installed().await.unwrap();
+        let li = fx.last_argv();
+        fx.cli.list_updates().await.unwrap();
+        let lu = fx.last_argv();
+        fx.cli.pin(&id).await.unwrap();
+        let pin = fx.last_argv();
+        fx.cli.unpin(&id).await.unwrap();
+        let unpin = fx.last_argv();
+
+        for argv in [&up, &rm, &li, &lu, &pin, &unpin] {
+            assert_eq!(argv.contains(&src), accept, "{argv:?}");
+        }
+        // the package-agreements flag exists only on update (and install)
+        assert_eq!(up.contains(&pkg_flag), accept);
+        for argv in [&rm, &li, &lu, &pin, &unpin] {
+            assert!(!argv.contains(&pkg_flag), "{argv:?}");
+        }
+    }
+}

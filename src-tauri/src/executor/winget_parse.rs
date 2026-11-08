@@ -452,6 +452,16 @@ pub fn parse_table(text: &str) -> ParsedTable {
             break;
         }
         let chars: Vec<char> = line.chars().collect();
+        // winget pads by display width, so wide (CJK) names shift char offsets. A column
+        // start must follow padding; if not, the row is misaligned and skipped.
+        if cols
+            .iter()
+            .any(|(_, st)| *st > 0 && *st <= chars.len() && !chars[*st - 1].is_whitespace())
+        {
+            out.warnings
+                .push(format!("misaligned row skipped (wide characters?): {t}"));
+            continue;
+        }
         let id = cell(&chars, id_col);
         if id.is_empty() {
             out.warnings.push(format!("row without id skipped: {t}"));
@@ -778,6 +788,23 @@ Armoury Crate Service      ARP\\Machine\\X64\\Armoury Crate Service 6.7.6.0
     fn table_skips_banner_and_spinner_noise() {
         let noisy = format!("\r-\r\\\r|\rSome source update notice\r\n   - \r\n{LIST}");
         assert_eq!(parse_table(&noisy).rows.len(), 3);
+    }
+
+    #[test]
+    fn wide_character_row_is_skipped_with_warning() {
+        let table = format!(
+            "Name        Id        Version
+----
+{}
+{}
+",
+            "日本語      Foo.Bar   1.0", "Plain       Baz.Qux   2.0"
+        );
+        let t = parse_table(&table);
+        assert_eq!(t.rows.len(), 1, "{:?}", t.rows);
+        assert_eq!(t.rows[0].id, "Baz.Qux");
+        assert_eq!(t.warnings.len(), 1);
+        assert!(t.warnings[0].contains("misaligned"));
     }
 
     #[test]
