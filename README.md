@@ -11,7 +11,8 @@ with a clean, fast UI and an optional headless mode for managing Windows Server 
 
 Early and in progress. This is deliberately a **slow-moving, community-built project** — no
 deadlines, contribution is asynchronous, and every piece of work is a self-contained issue that
-anyone (on any model tier) can pick up. See `docs/ISSUE-BACKLOG.md`.
+anyone (on any model tier) can pick up. See the [open issues](https://github.com/aniketbhoir-git/winstore-rs/issues)
+and `docs/ISSUE-BACKLOG.md`. Issues #1 and #2 (scaffold, domain + persistence) are done.
 
 ## How it works
 
@@ -39,7 +40,7 @@ implementation issue is a paste-ready prompt. Start here:
 - [`CONTRIBUTING.md`](CONTRIBUTING.md)
 - [`docs/CONTRIBUTING-WITH-LLM.md`](docs/CONTRIBUTING-WITH-LLM.md)
 - [`docs/SPEC.md`](docs/SPEC.md) — the LLM hand-off spec (safe to paste into any model)
-- [`docs/ISSUE-BACKLOG.md`](docs/ISSUE-BACKLOG.md) — pick an issue
+- [Open issues](https://github.com/aniketbhoir-git/winstore-rs/issues) — pick one labelled `tier:any` or `tier:max`; [`docs/ISSUE-BACKLOG.md`](docs/ISSUE-BACKLOG.md) has the same list
 
 ## License
 
