@@ -31,8 +31,9 @@ This environment runs `tier:max` issues (winget parser, install loop, msstore ad
 elevation). `tier:any` issues are reserved for community contributors on cheaper models.
 
 ## Status
-- Done on `main`: #1 scaffold + CI, #2 domain model + persistence (58 tests, clippy/fmt clean).
-- Next: #3 (community catalog) and #4 (winget executor) in parallel; then #5.
+- Done on `main`: #1 scaffold + CI, #2 domain model + persistence, #3 community catalog
+  (winget.run, PR #14), #4 winget executor + progress parser (PR #15). 149 tests, clippy/fmt clean.
+- Next: #5 (Tauri IPC layer + UI skeleton); then #6 (MVP). Follow-up #16: fresher catalog source.
 - Repo: https://github.com/aniketbhoir-git/winstore-rs — GitHub issue numbers match
   `docs/ISSUE-BACKLOG.md`. Session prompts live in `docs/PROMPT-START.md`.
 
@@ -60,6 +61,10 @@ elevation). `tier:any` issues are reserved for community contributors on cheaper
 - `src-tauri/src/db/{mod,models}.rs`, `db/repo/*.rs`, `db/migrations/*.sql` — pool, row
   mapping, repositories (packages with TTL, installs with guarded state transitions,
   sources, settings, operation_log).
+- `src-tauri/src/catalog/{mod,search}.rs`, `sources/winget_repo.rs` — `CatalogSource` trait,
+  search coordinator with TTL cache (`detail_fetched_at`), winget.run v2 adapter (reqwest, httpmock tests).
+- `src-tauri/src/executor/{mod,winget_cli,winget_parse}.rs`, `tests/fixtures/fake_winget.rs` —
+  `PackageExecutor` trait, winget subprocess wrapper, progress parser; the fake is a cargo example.
 - `ui/` — Vite + Svelte + TS skeleton; `invoke('app_version')` is the only command so far.
 
 ## Project skills

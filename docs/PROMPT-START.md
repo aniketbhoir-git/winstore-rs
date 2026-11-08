@@ -5,11 +5,12 @@ Fenced as plain text so they can be copied directly.
 
 ## Status (2026-11-09)
 
-- Issues #1 (scaffold + CI) and #2 (domain + persistence) are done and merged on `main`.
+- Issues #1 (scaffold + CI), #2 (domain + persistence), #3 (community catalog, PR #14) and
+  #4 (winget executor, PR #15) are done and merged on `main`. 149 tests pass in CI.
 - Repo: https://github.com/aniketbhoir-git/winstore-rs — issues numbered as in
   `docs/ISSUE-BACKLOG.md`; `main` is protected and requires the `windows` CI check.
-- Next: **#3 (community catalog) and #4 (winget executor) can run in parallel** in two
-  sessions; they touch disjoint files. #5 needs both.
+- Next: **#5 (Tauri IPC layer + UI skeleton)**, then #6 (MVP). #16 tracks a fresher catalog
+  source than winget.run; it can run in parallel with #5.
 
 ## Resume prompt — one issue per session
 
@@ -17,8 +18,8 @@ Replace `<N>` with the issue number. Run from the `store/` folder.
 
 ```text
 You are continuing "Store" (working title; repo aniketbhoir-git/winstore-rs), an open-source
-Rust + Tauri 2 app storefront and package-manager front end for Windows. Issues #1 and #2
-are done on main: the crate in src-tauri/ builds, 58 tests pass, CI is green.
+Rust + Tauri 2 app storefront and package-manager front end for Windows. Issues #1 to #4
+are done on main: the crate in src-tauri/ builds, 149 tests pass, CI is green.
 
 YOUR SCOPE (hard stop): implement Issue #<N> exactly as written in docs/ISSUE-BACKLOG.md and
 the matching GitHub issue. Do not start any other issue. Stop and report when its acceptance
