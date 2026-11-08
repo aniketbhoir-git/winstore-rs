@@ -2,6 +2,7 @@ pub mod config;
 pub mod db;
 pub mod domain;
 pub mod error;
+pub mod executor;
 
 use std::path::PathBuf;
 
