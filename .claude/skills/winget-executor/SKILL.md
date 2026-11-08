@@ -118,7 +118,7 @@ Full table with verified/inferred marks: `references/winget-cli.md`. Exit codes 
 | 0x8A150011 | INSTALLER_HASH_MISMATCH | `WingetFailed` (security; never offer an override) |
 | 0x8A15002B | UPDATE_NOT_APPLICABLE | Done, no-op |
 | 0x8A150019 | COMMAND_REQUIRES_ADMIN | `ElevationRequired` |
-| 0x8A150041 / 0x8A150046 | PACKAGE / SOURCE_AGREEMENTS_NOT_ACCEPTED | agreement prompt for the UI; until it exists, `Unsupported("agreements not accepted")` |
+| 0x8A150041 / 0x8A150046 | PACKAGE / SOURCE_AGREEMENTS_NOT_ACCEPTED | agreement prompt for the UI; until it exists, `AgreementsRequired` |
 | 0x8A150005, 0x8A15006A, 0x8A15010C | CTRL_SIGNAL, APPTERMINATION, INSTALL_CANCELLED_BY_USER | `Cancelled` |
 | 740 (Win32 installer code) | ERROR_ELEVATION_REQUIRED | `ElevationRequired` (INFERRED) |
 | anything else | - | `WingetFailed{code, stderr}` |
@@ -148,7 +148,7 @@ winget has no cancel API. Cancel means: kill the process tree, then record Cance
 
 ## Test strategy
 
-- Fixture under `src-tauri/tests/fixtures/`: a PowerShell script (`fake_winget.ps1`) or a tiny `[[bin]]`. It reads a script file named by `FAKE_WINGET_SCRIPT` (lines to print to stdout/stderr, optional `sleep <ms>`, final `exit <code>`) and writes its argv to a file for assertions.
+- Fixture: `src-tauri/tests/fixtures/fake_winget.rs` (a dev-only cargo example, built by the tests; see its header for the script format).
 - `STORE_WINGET_PATH` points the executor at the fake. Set it per test (temp dir), never process-global.
 - Cover: each stage line, bar progress, table parse (reuse OBSERVED tables from the reference), every exit-code row above, cancel mid-download, agreements flags absent unless config true (assert argv), `--force` / `--ignore-security-hash` never in argv, `\r` spinner noise, invalid UTF-8 bytes, winget missing -> `WingetNotFound`.
 - CI never runs real winget. Manual smoke (Issue #4 acceptance): install and remove one small package on Windows; paste the real output into the reference.
