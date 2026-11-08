@@ -93,7 +93,7 @@ Release Notes:
 ```
 
 Note: `show` prints `Found <Name> [<Id>]` with no trailing `Version`. Header form differs by command
-(`install` prints `Found <Name> [<Id>] Version <v>`, INFERRED), so match on the `Found ` prefix and the bracketed id.
+(`install` prints `Found <Name> [<Id>] Version <v>`, OBSERVED; `uninstall` prints `Found <Name> [<Id>]`), so match on the `Found ` prefix and the bracketed id.
 
 `winget list --upgrade-available --disable-interactivity`:
 
@@ -118,22 +118,32 @@ Android Studio             Google.AndroidStudio                  2026.2.2.9     
 Armoury Crate Service      ARP\Machine\X64\Armoury Crate Service 6.7.6.0
 ```
 
-## Install/uninstall stdout (INFERRED, not observed)
+## Install/uninstall stdout (OBSERVED 2026-11-09, winget 1.29.380)
 
-Typical sequence for `winget install --id X --exact --silent`:
+Smoke test `tests/winget_smoke.rs` with `jqlang.jq` 1.8.2, agreements accepted. The executor
+printed one line per stage change; each line below is the winget stdout line that moved the stage.
+
+`winget install --id jqlang.jq --exact --source winget --silent ...`:
 
 ```text
-Found Some App [Vendor.SomeApp] Version 1.2.3
-This application is licensed to you by its owner.
-Microsoft is not responsible for, nor does it grant any licenses to, third-party packages.
-Downloading https://example.invalid/installer.exe
-  ██████████████▒▒▒▒▒▒▒▒▒▒▒▒▒▒  4.00 MB / 8.00 MB
+Found jq [jqlang.jq] Version 1.8.2
+Downloading https://github.com/jqlang/jq/releases/download/jq-1.8.2/jq-windows-amd64.exe
 Successfully verified installer hash
 Starting package install...
 Successfully installed
 ```
 
-Re-verify against a real run; then replace this block with the captured text.
+`winget uninstall --id jqlang.jq --exact --silent ...`:
+
+```text
+Found jq [jqlang.jq]
+Starting package uninstall...
+Successfully uninstalled
+```
+
+Both exited 0. Not observed in this run: the download bar line (the jq download is about 1 MB
+and the smoke output shows stage changes only), the license notice lines (they do not change the
+stage), and `Installer failed with exit code: <n>`. Those patterns stay INFERRED.
 
 ## Exit codes
 

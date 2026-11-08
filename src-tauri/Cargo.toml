@@ -2,6 +2,7 @@
 name = "store"
 version = "0.1.0"
 description = "Open-source app storefront and package-manager front end"
+default-run = "store"
 edition = "2021"
 license = "MIT"
 
@@ -9,19 +10,27 @@ license = "MIT"
 name = "store_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
+[[example]]
+name = "fake_winget"
+path = "tests/fixtures/fake_winget.rs"
+test = false
+
 [build-dependencies]
 tauri-build = "2.7"
 
 [dependencies]
 tauri = "2.12"
 sqlx = { version = "0.8", features = ["runtime-tokio", "sqlite", "migrate"] }
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "fs"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "fs", "process", "io-util", "time"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 directories = "6"
+
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.62", features = ["Win32_Foundation", "Win32_Security", "Win32_System_JobObjects", "Win32_System_Threading"] }
 
 [dev-dependencies]
 tempfile = "3"

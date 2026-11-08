@@ -28,6 +28,15 @@ pub enum AppError {
     ElevationRequired,
     #[error("invalid configuration: {0}")]
     InvalidConfig(String),
+    /// winget needs the user to accept source and/or package agreements (SPEC §0 rule 4).
+    /// Fields are not named `source`/`package` because thiserror treats `source` as the cause.
+    #[error(
+        "agreements must be accepted (source: {source_agreements}, package: {package_agreements})"
+    )]
+    AgreementsRequired {
+        source_agreements: bool,
+        package_agreements: bool,
+    },
 }
 
 pub type AppResult<T> = Result<T, AppError>;
@@ -48,6 +57,7 @@ impl AppError {
             AppError::Unsupported(_) => "unsupported",
             AppError::ElevationRequired => "elevation_required",
             AppError::InvalidConfig(_) => "invalid_config",
+            AppError::AgreementsRequired { .. } => "agreements_required",
         }
     }
 
@@ -133,6 +143,14 @@ mod tests {
             (AppError::Unsupported("x".into()), "unsupported", false),
             (AppError::ElevationRequired, "elevation_required", false),
             (AppError::InvalidConfig("x".into()), "invalid_config", false),
+            (
+                AppError::AgreementsRequired {
+                    source_agreements: true,
+                    package_agreements: false,
+                },
+                "agreements_required",
+                false,
+            ),
         ]
     }
 
