@@ -14,7 +14,7 @@ fully independently.
 
 ## Process
 
-1. Pick an unassigned issue; comment "I'm on this" and assign it to yourself.
+1. Pick an unassigned issue at https://github.com/aniketbhoir-git/winstore-rs/issues; comment "I'm on this" and assign it to yourself.
 2. Branch from `main`: `impl/<issue#>--short-name`.
 3. Follow `docs/SPEC.md`. If you're generating code with a model, read
    [`docs/CONTRIBUTING-WITH-LLM.md`](docs/CONTRIBUTING-WITH-LLM.md) first.

@@ -1,7 +1,62 @@
-# Kickoff prompt — run inside this repo folder
+# Session prompts
 
-Open Claude Code in the `store/` directory and paste the block below verbatim.
-Fenced as plain text so it can be copied directly.
+Paste-ready prompts for a Claude Code (or other model) session in the `store/` repo root.
+Fenced as plain text so they can be copied directly.
+
+## Status (2026-11-09)
+
+- Issues #1 (scaffold + CI) and #2 (domain + persistence) are done and merged on `main`.
+- Repo: https://github.com/aniketbhoir-git/winstore-rs — issues numbered as in
+  `docs/ISSUE-BACKLOG.md`; `main` is protected and requires the `windows` CI check.
+- Next: **#3 (community catalog) and #4 (winget executor) can run in parallel** in two
+  sessions; they touch disjoint files. #5 needs both.
+
+## Resume prompt — one issue per session
+
+Replace `<N>` with the issue number. Run from the `store/` folder.
+
+```text
+You are continuing "Store" (working title; repo aniketbhoir-git/winstore-rs), an open-source
+Rust + Tauri 2 app storefront and package-manager front end for Windows. Issues #1 and #2
+are done on main: the crate in src-tauri/ builds, 58 tests pass, CI is green.
+
+YOUR SCOPE (hard stop): implement Issue #<N> exactly as written in docs/ISSUE-BACKLOG.md and
+the matching GitHub issue. Do not start any other issue. Stop and report when its acceptance
+criteria are met.
+
+BEFORE WRITING CODE:
+1. Read CLAUDE.md, then docs/SPEC.md §0 and the sections the issue cites, then the issue.
+2. Read the existing code you build on: src-tauri/src/{lib.rs,error.rs,config.rs},
+   src-tauri/src/domain/*.rs, src-tauri/src/db/{mod.rs,models.rs,repo/*.rs}.
+3. Run `cargo test` in src-tauri once to confirm the baseline is green before you change
+   anything. Cargo lives at %USERPROFILE%\.cargo\bin (see CLAUDE.md "Environment notes").
+
+WORKFLOW:
+- Branch from main: impl/<N>--short-name. Commit logical chunks with clear messages.
+- After each chunk: cargo build -> cargo test -> cargo clippy --all-targets -- -D warnings
+  -> cargo fmt. Zero warnings.
+- Tests for parsers and state transitions. Mock HTTP with httpmock; mock winget with a fake
+  executable fixture. Never call the network or winget in unit tests.
+- When done: push the branch, open a PR with the repository template, make sure the
+  `windows` CI check passes, and tick the guardrail checklist in the PR body.
+
+NON-NEGOTIABLE RULES (docs/SPEC.md §0): positive, neutral terminology; public, documented
+interfaces only (winget, MSIX, Windows Deployment API); no payment, account sign-in, or
+licensing/entitlement logic ever (paid items show only the "Buy in Microsoft Store" browser
+hand-off); no telemetry beyond the catalogs the user enables; MIT; original branding.
+
+STACK: Rust stable, Tauri 2, Svelte/TypeScript, sqlx SQLite, tokio, windows-rs. You may add
+reqwest + httpmock (issue #3) or tokio-process helpers (issue #4). Ask before any other dep.
+
+ESCALATION: if a decision changes scope, needs an unlisted dependency, or conflicts with
+SPEC.md, stop and report the question with the options. Aniket decides, or hands it to the
+Fable orchestrator session.
+
+END WITH A SHORT REPORT: files touched, test/clippy output tail, PR link, deviations from
+the spec, open questions.
+```
+
+## Kickoff prompt (historical — used for #1 and #2)
 
 ```text
 You are bootstrapping "Store" (working title) — an open-source Rust + Tauri 2 app
@@ -46,8 +101,7 @@ DEFINITION OF DONE:
 
 ## Notes
 
-- Run it from the repo root so `docs/...` paths resolve.
-- After the session, review the report, then issue a follow-up prompt for the next issue
-  (recommended order in `docs/ISSUE-BACKLOG.md`: #1 → #2 → #3 ∥ #4 → #5 → #6).
+- Run prompts from the repo root so `docs/...` paths resolve.
 - `CLAUDE.md` at the repo root auto-loads for every Claude Code session, so the guardrails
-  stay in force even if a future prompt omits them.
+  stay in force even if a prompt omits them.
+- Recommended order: #1 → #2 → (#3 ∥ #4) → #5 → #6 (MVP); everything after #6 is parallel.

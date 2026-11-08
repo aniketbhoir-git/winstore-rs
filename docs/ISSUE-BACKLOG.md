@@ -1,5 +1,7 @@
 # Issue backlog
 
+Tracked on GitHub: https://github.com/aniketbhoir-git/winstore-rs/issues (same numbers).
+
 Each issue below is a **self-contained, paste-ready prompt**. Copy the body into your model
 together with `docs/SPEC.md` §0 (terminology + hard rules).
 
@@ -27,7 +29,7 @@ Suggested order: **#1 → #2 → (#3 ∥ #4) → #5 → #6 (MVP)** — everythin
 
 ---
 
-### Issue 1 — Project scaffold + CI (SPEC WP0)
+### Issue 1 — Project scaffold + CI (SPEC WP0) — ✅ done
 - **Labels:** `tier:any`, `size:S`, `area:infra`
 - **Depends on:** none
 - **Goal:** a compilable Rust + Tauri 2 repo that builds and tests on Windows CI.
@@ -40,7 +42,7 @@ Suggested order: **#1 → #2 → (#3 ∥ #4) → #5 → #6 (MVP)** — everythin
   round-trips; migrations apply from empty.
 - **LLM note:** `tier:any`; pure scaffolding, cheap model is fine.
 
-### Issue 2 — Domain model + persistence (SPEC WP1)
+### Issue 2 — Domain model + persistence (SPEC WP1) — ✅ done
 - **Labels:** `tier:any`, `size:S`, `area:core`
 - **Depends on:** #1
 - **Goal:** the §4 enums/structs and the §4.3 SQLite schema, with repositories.
