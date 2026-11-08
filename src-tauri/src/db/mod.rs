@@ -4,6 +4,9 @@ use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions};
 
 use crate::error::{AppError, AppResult};
 
+pub mod models;
+pub mod repo;
+
 pub type DbPool = sqlx::SqlitePool;
 
 pub static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("./src/db/migrations");
@@ -50,14 +53,23 @@ mod tests {
             .fetch_one(pool)
             .await
             .unwrap();
-        assert_eq!(n, 1);
-        let t: i64 = sqlx::query_scalar(
-            "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='settings'",
-        )
-        .fetch_one(pool)
-        .await
-        .unwrap();
-        assert_eq!(t, 1);
+        assert_eq!(n, 2);
+        for table in [
+            "settings",
+            "packages",
+            "installs",
+            "sources",
+            "operation_log",
+        ] {
+            let t: i64 = sqlx::query_scalar(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?",
+            )
+            .bind(table)
+            .fetch_one(pool)
+            .await
+            .unwrap();
+            assert_eq!(t, 1, "missing table {table}");
+        }
     }
 
     #[tokio::test]
