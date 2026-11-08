@@ -1,8 +1,10 @@
+pub mod catalog;
 pub mod config;
 pub mod db;
 pub mod domain;
 pub mod error;
 pub mod executor;
+pub mod sources;
 
 use std::path::PathBuf;
 

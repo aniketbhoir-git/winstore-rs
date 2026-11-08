@@ -5,7 +5,7 @@ use crate::error::AppResult;
 
 const UPSERT_SUMMARY: &str = "INSERT INTO packages (source, package_id, name, publisher, \
     latest_version, description, icon_url, rating, rating_count, is_paid, packaging, \
-    detail_json, fetched_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) \
+    detail_json, fetched_at, detail_fetched_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) \
     ON CONFLICT(source, package_id) DO UPDATE SET name = excluded.name, \
     publisher = excluded.publisher, latest_version = excluded.latest_version, \
     description = excluded.description, icon_url = excluded.icon_url, \
@@ -13,9 +13,17 @@ const UPSERT_SUMMARY: &str = "INSERT INTO packages (source, package_id, name, pu
     is_paid = excluded.is_paid, packaging = excluded.packaging, \
     fetched_at = excluded.fetched_at";
 
-async fn write_row(pool: &DbPool, row: PackageRow, replace_detail: bool) -> AppResult<()> {
-    let sql = if replace_detail {
-        format!("{UPSERT_SUMMARY}, detail_json = excluded.detail_json")
+/// `detail_fetched_at` is `Some` only for a detail write; a summary write keeps the old one.
+async fn write_row(
+    pool: &DbPool,
+    row: PackageRow,
+    detail_fetched_at: Option<i64>,
+) -> AppResult<()> {
+    let sql = if detail_fetched_at.is_some() {
+        format!(
+            "{UPSERT_SUMMARY}, detail_json = excluded.detail_json, \
+             detail_fetched_at = excluded.detail_fetched_at"
+        )
     } else {
         UPSERT_SUMMARY.to_string()
     };
@@ -33,6 +41,7 @@ async fn write_row(pool: &DbPool, row: PackageRow, replace_detail: bool) -> AppR
         .bind(row.packaging)
         .bind(row.detail_json)
         .bind(row.fetched_at)
+        .bind(detail_fetched_at)
         .execute(pool)
         .await?;
     Ok(())
@@ -45,7 +54,7 @@ pub async fn upsert_summary(
     fetched_at: i64,
 ) -> AppResult<()> {
     let row = PackageRow::from_summary(summary, None, fetched_at)?;
-    write_row(pool, row, false).await
+    write_row(pool, row, None).await
 }
 
 /// Stores the full detail and refreshes the summary columns from it.
@@ -55,7 +64,7 @@ pub async fn upsert_detail(
     fetched_at: i64,
 ) -> AppResult<()> {
     let row = PackageRow::from_summary(&detail.summary, Some(detail), fetched_at)?;
-    write_row(pool, row, true).await
+    write_row(pool, row, Some(fetched_at)).await
 }
 
 async fn get_row(
@@ -106,6 +115,31 @@ pub async fn get_fresh_summary(
     match get_row(pool, source, package_id).await? {
         Some(row) if now - row.fetched_at <= ttl_secs => Ok(Some(PackageSummary::try_from(row)?)),
         _ => Ok(None),
+    }
+}
+
+/// Cached detail, or `None` when missing or when the detail itself (not the summary row)
+/// is older than `ttl_secs` at `now`.
+pub async fn get_fresh_detail(
+    pool: &DbPool,
+    source: SourceKind,
+    package_id: &str,
+    ttl_secs: i64,
+    now: i64,
+) -> AppResult<Option<PackageDetail>> {
+    let row = sqlx::query_as::<_, PackageRow>(
+        "SELECT * FROM packages WHERE source = ? AND package_id = ? \
+         AND detail_fetched_at IS NOT NULL AND ? - detail_fetched_at <= ?",
+    )
+    .bind(source.to_string())
+    .bind(package_id)
+    .bind(now)
+    .bind(ttl_secs)
+    .fetch_optional(pool)
+    .await?;
+    match row {
+        Some(row) => row.into_detail(),
+        None => Ok(None),
     }
 }
 
@@ -233,6 +267,38 @@ mod tests {
             .await
             .unwrap();
         assert!(missing.is_none());
+    }
+
+    #[tokio::test]
+    async fn summary_refresh_does_not_refresh_detail() {
+        let pool = test_pool().await;
+        let d = fixtures::detail(SourceKind::Scoop, "p", "P");
+        assert!(get_fresh_detail(&pool, SourceKind::Scoop, "p", 60, 0)
+            .await
+            .unwrap()
+            .is_none());
+        upsert_detail(&pool, &d, 100).await.unwrap();
+        assert_eq!(
+            get_fresh_detail(&pool, SourceKind::Scoop, "p", 60, 160)
+                .await
+                .unwrap(),
+            Some(d.clone())
+        );
+        upsert_summary(&pool, &d.summary, 1000).await.unwrap();
+        // The row is fresh again, but its detail is still from t=100.
+        assert!(get_fresh_summary(&pool, SourceKind::Scoop, "p", 60, 1000)
+            .await
+            .unwrap()
+            .is_some());
+        assert!(get_fresh_detail(&pool, SourceKind::Scoop, "p", 60, 1000)
+            .await
+            .unwrap()
+            .is_none());
+        upsert_detail(&pool, &d, 1000).await.unwrap();
+        assert!(get_fresh_detail(&pool, SourceKind::Scoop, "p", 60, 1000)
+            .await
+            .unwrap()
+            .is_some());
     }
 
     #[tokio::test]
