@@ -64,8 +64,9 @@ pin:       winget pin add --id ID --exact | winget pin remove --id ID --exact | 
 
 Line-oriented and tolerant: unknown lines go to the log tail and never change the stage.
 Fraction is monotonic. Exit code decides success; stdout only drives progress.
-Per-line patterns below are INFERRED from winget behavior (a real install was not run for this
-skill). Confirm them in the manual smoke test, then move them into the reference file as OBSERVED.
+The `Found`, `Downloading`, hash, `Starting package install/uninstall...` and `Successfully
+installed/uninstalled` lines were OBSERVED in the Issue #4 smoke test (jq, winget 1.29.380).
+The bar line, license notices, `Installer failed with exit code` and the agreement prompts are still INFERRED.
 
 | Line pattern | Stage | Fraction |
 |---|---|---|
