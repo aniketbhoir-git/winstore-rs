@@ -131,7 +131,14 @@ pub async fn run_start_install(
     let executor = core.executor().await?;
     // The executor's per-package guard rejects a second operation before anything is written.
     let handle = executor.install(&id, &request).await?;
-    begin(&core, &id, target.clone()).await?;
+    if let Err(e) = begin(&core, &id, target.clone(), None).await {
+        // The process is already running: cancel it and drain it in the background so
+        // nothing keeps running unseen. The ledger was never touched, so it is left alone.
+        let _ = executor.cancel(&handle.operation_id).await;
+        let err = error_json(&e);
+        tokio::spawn(async move { abandon(&sink, handle, &id, err).await });
+        return Err(e);
+    }
     Ok(spawn_operation(
         core,
         sink,
@@ -163,16 +170,33 @@ pub async fn run_update_all(state: &AppState, sink: SharedSink) -> AppResult<Upd
         let target = Some(u.latest_version.clone());
         let result = match executor.update(&u.package_id).await {
             Ok(handle) => {
-                begin(&core, &u.package_id, target.clone()).await?;
-                drive(
+                // A ledger refusal (for example a pinned row) is this package's failure, not
+                // the loop's: cancel the started update, settle it, and continue.
+                match begin(
                     &core,
-                    &sink,
-                    handle,
                     &u.package_id,
-                    Operation::Update,
-                    target,
+                    target.clone(),
+                    Some(&u.installed_version),
                 )
                 .await
+                {
+                    Ok(()) => {
+                        drive(
+                            &core,
+                            &sink,
+                            handle,
+                            &u.package_id,
+                            Operation::Update,
+                            target,
+                        )
+                        .await
+                    }
+                    Err(e) => {
+                        let _ = executor.cancel(&handle.operation_id).await;
+                        abandon(&sink, handle, &u.package_id, error_json(&e)).await;
+                        Err(e)
+                    }
+                }
             }
             Err(e) => Err(e),
         };
@@ -234,12 +258,24 @@ pub fn run_open_store_page(product_id: &str) -> AppResult<()> {
 
 /// Records `Installing` in the ledger. A leftover `Installing` row from an earlier run is
 /// accepted: the executor guard already ensured nothing is running for this package.
-async fn begin(core: &Core, id: &PackageId, target: Option<String>) -> AppResult<()> {
+/// `installed_version` seeds a row for an app that was installed outside this app, so a
+/// failed or cancelled update keeps it `Installed`.
+async fn begin(
+    core: &Core,
+    id: &PackageId,
+    target: Option<String>,
+    installed_version: Option<&str>,
+) -> AppResult<()> {
     let mut rec = match installs::get(&core.pool, id).await? {
         Some(r) => r,
         None => {
             let (kind, _) = PackageId::parse(id.as_str())?;
-            InstallRecord::new(id.clone(), kind)
+            let mut rec = InstallRecord::new(id.clone(), kind);
+            if let Some(v) = installed_version.filter(|v| !v.is_empty()) {
+                rec.installed_version = Some(v.to_string());
+                rec.state = InstallState::Installed;
+            }
+            rec
         }
     };
     if rec.state != InstallState::Installing {
@@ -283,6 +319,30 @@ async fn drive(
     result
 }
 
+/// Drains a started operation that the ledger refused: progress is still relayed, the outcome
+/// is awaited, and the finish event carries the refusal. The ledger is not written.
+async fn abandon(
+    sink: &SharedSink,
+    mut handle: OperationHandle,
+    id: &PackageId,
+    error: serde_json::Value,
+) {
+    while let Some(ev) = handle.events.recv().await {
+        events::emit_progress(sink.as_ref(), &ev);
+    }
+    let _ = handle.outcome.await;
+    emit(
+        sink.as_ref(),
+        EVENT_OPERATION_FINISHED,
+        &OperationFinishedEvent {
+            operation_id: handle.operation_id.clone(),
+            package_id: id.clone(),
+            ok: false,
+            error: Some(error),
+        },
+    );
+}
+
 fn spawn_operation(
     core: Arc<Core>,
     sink: SharedSink,
@@ -318,8 +378,9 @@ async fn settle(
             rec.last_updated = Some(crate::domain::now_unix());
             InstallState::Installed
         }
-        // A failed or cancelled update leaves the old version in place.
-        Err(_) if op == Operation::Update && had_version => InstallState::Installed,
+        // A failed or cancelled operation leaves an already installed version in place,
+        // whether it was an update or a reinstall.
+        Err(_) if op != Operation::Remove && had_version => InstallState::Installed,
         Err(AppError::Cancelled) => InstallState::NotInstalled,
         Err(_) => InstallState::Failed,
     };

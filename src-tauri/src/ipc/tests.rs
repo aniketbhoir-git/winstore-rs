@@ -149,7 +149,12 @@ async fn state_with(paid: bool, down: bool, factory: ExecutorFactory) -> (AppSta
 }
 
 fn exec_factory(exec: FakeExec) -> ExecutorFactory {
-    let exec: Arc<dyn PackageExecutor> = Arc::new(exec);
+    shared_exec_factory(Arc::new(exec))
+}
+
+/// Keeps a handle on the fake so a test can inspect what the executor received.
+fn shared_exec_factory(exec: Arc<FakeExec>) -> ExecutorFactory {
+    let exec: Arc<dyn PackageExecutor> = exec;
     Arc::new(move || {
         let e = Arc::clone(&exec);
         Box::pin(async move { Ok(e) })
@@ -339,16 +344,84 @@ async fn update_all_runs_each_update_and_summarises() {
         .unwrap();
     assert_eq!(a.installed_version.as_deref(), Some("2.0.0"));
     assert_eq!(a.state, InstallState::Installed);
+    // A failed update keeps the version that was already installed.
     let b = installs::get(&pool, &PackageId::new(KIND, "B.B"))
         .await
         .unwrap()
         .unwrap();
-    assert_eq!(b.state, InstallState::Failed);
+    assert_eq!(b.state, InstallState::Installed);
+    assert_eq!(b.installed_version.as_deref(), Some("1.0.0"));
+}
+
+#[tokio::test]
+async fn update_all_continues_when_the_ledger_refuses_one_package() {
+    let mk = |n: &str| UpdateAvailable {
+        package_id: PackageId::new(KIND, n),
+        installed_version: "1.0.0".into(),
+        latest_version: "2.0.0".into(),
+        source: KIND,
+        is_auto: false,
+    };
+    let mut exec = FakeExec::scripted(vec![
+        (vec![OperationStage::Cancelled], Err(AppError::Cancelled)),
+        (vec![OperationStage::Done], Ok(())),
+    ]);
+    exec.updates = vec![mk("A.A"), mk("B.B")];
+    let exec = Arc::new(exec);
+    let (state, pool) = state_with(false, false, shared_exec_factory(exec.clone())).await;
+    // A pinned row may not move to Installing (SPEC §4.1 state machine).
+    let pinned = PackageId::new(KIND, "A.A");
+    let mut rec = crate::domain::InstallRecord::new(pinned.clone(), KIND);
+    rec.state = InstallState::Pinned;
+    rec.pinned = true;
+    rec.installed_version = Some("1.0.0".into());
+    installs::upsert(&pool, &rec).await.unwrap();
+
+    let sink = Arc::new(RecordingSink::default());
+    let summary = run_update_all(&state, sink.clone()).await.unwrap();
+    assert_eq!(
+        (summary.total, summary.succeeded, summary.failed),
+        (2, 1, 1)
+    );
+    // The refused update was cancelled, the pinned row is untouched, B.B still went through.
+    assert_eq!(exec.cancelled.lock().unwrap().as_slice(), ["op-1"]);
+    let a = installs::get(&pool, &pinned).await.unwrap().unwrap();
+    assert_eq!(a.state, InstallState::Pinned);
+    assert_eq!(a.installed_version.as_deref(), Some("1.0.0"));
+    let b = installs::get(&pool, &PackageId::new(KIND, "B.B"))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(b.state, InstallState::Installed);
+    assert_eq!(b.installed_version.as_deref(), Some("2.0.0"));
+}
+
+#[tokio::test]
+async fn cancelled_reinstall_keeps_the_installed_version() {
+    let exec = FakeExec::scripted(vec![(
+        vec![OperationStage::Cancelled],
+        Err(AppError::Cancelled),
+    )]);
+    let (state, pool) = state_with(false, false, exec_factory(exec)).await;
+    let mut rec = crate::domain::InstallRecord::new(id(), KIND);
+    rec.state = InstallState::Installed;
+    rec.installed_version = Some("1.0.0".into());
+    installs::upsert(&pool, &rec).await.unwrap();
+
+    let sink = Arc::new(RecordingSink::default());
+    run_start_install(&state, sink.clone(), PKG, InstallOptions::default())
+        .await
+        .unwrap();
+    let fin = wait_for(&sink, EVENT_OPERATION_FINISHED).await;
+    assert_eq!(fin["error"]["code"], "cancelled");
+    let rec = installs::get(&pool, &id()).await.unwrap().unwrap();
+    assert_eq!(rec.state, InstallState::Installed);
+    assert_eq!(rec.installed_version.as_deref(), Some("1.0.0"));
 }
 
 #[tokio::test]
 async fn check_updates_and_cancel_go_through_the_executor() {
-    let exec = FakeExec {
+    let exec = Arc::new(FakeExec {
         updates: vec![UpdateAvailable {
             package_id: id(),
             installed_version: "1".into(),
@@ -357,10 +430,11 @@ async fn check_updates_and_cancel_go_through_the_executor() {
             is_auto: false,
         }],
         ..FakeExec::default()
-    };
-    let (state, _) = state_with(false, false, exec_factory(exec)).await;
+    });
+    let (state, _) = state_with(false, false, shared_exec_factory(exec.clone())).await;
     assert_eq!(run_check_updates(&state).await.unwrap().len(), 1);
     run_cancel(&state, "op-9").await.unwrap();
+    assert_eq!(exec.cancelled.lock().unwrap().as_slice(), ["op-9"]);
 }
 
 #[test]
