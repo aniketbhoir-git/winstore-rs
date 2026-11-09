@@ -32,8 +32,9 @@ elevation). `tier:any` issues are reserved for community contributors on cheaper
 
 ## Status
 - Done on `main`: #1 scaffold + CI, #2 domain model + persistence, #3 community catalog
-  (winget.run, PR #14), #4 winget executor + progress parser (PR #15). 149 tests, clippy/fmt clean.
-- #5 (Tauri IPC layer + UI skeleton) in PR; next #6 (MVP). Follow-up #16: fresher catalog source.
+  (winget.run, PR #14), #4 winget executor + progress parser (PR #15), #5 Tauri IPC layer + UI
+  skeleton (PR #18). 163 tests, clippy/fmt clean.
+- Next: #6 (detail page + full install loop, the MVP). Follow-up #16: fresher catalog source.
 - Repo: https://github.com/aniketbhoir-git/winstore-rs — GitHub issue numbers match
   `docs/ISSUE-BACKLOG.md`. Session prompts live in `docs/PROMPT-START.md`.
 
