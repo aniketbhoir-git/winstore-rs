@@ -1,37 +1,27 @@
 <script lang="ts">
-  import { api, toAppError } from '../lib/api'
   import { operations } from '../lib/operations.svelte'
   import type { PackageSummary } from '../lib/types'
+  import BuyInStoreButton from './BuyInStoreButton.svelte'
   import ProgressBar from './ProgressBar.svelte'
 
   let { pkg }: { pkg: PackageSummary } = $props()
 
   const op = $derived(operations.get(pkg.id))
   const running = $derived(!!op && !op.finished)
-  let browserError = $state<string | null>(null)
-
-  // Paid items only ever get the browser hand-off (product id = source-local id).
-  async function buy() {
-    browserError = null
-    try {
-      await api.openStorePage(pkg.id.slice(pkg.id.indexOf('/') + 1))
-    } catch (e) {
-      browserError = toAppError(e).message
-    }
-  }
+  // Installed in this session (a finished uninstall resets it).
+  const installed = $derived(op?.stage === 'done' && op.operation !== 'remove')
 </script>
 
 {#if pkg.is_paid}
-  <button class="secondary" onclick={buy}>Buy in Microsoft Store</button>
-  {#if browserError}<p class="error" role="alert">{browserError}</p>{/if}
+  <BuyInStoreButton id={pkg.id} />
 {:else if running && op}
   <div class="progress">
     <ProgressBar fraction={op.fraction} label={`${op.stage}${op.message ? ': ' + op.message : ''}`} />
     <button class="secondary" onclick={() => operations.cancel(pkg.id)}>Cancel</button>
   </div>
 {:else}
-  <button disabled={op?.stage === 'done'} onclick={() => operations.install(pkg.id)}>
-    {op?.stage === 'done' ? 'Installed' : op?.error ? 'Retry' : 'Install'}
+  <button disabled={installed} onclick={() => operations.install(pkg.id)}>
+    {installed ? 'Installed' : op?.error && op.operation !== 'remove' ? 'Retry' : 'Install'}
   </button>
   {#if op?.error}
     <p class="error" role="alert">{op.error.message}</p>
@@ -51,7 +41,7 @@
     color: #fff;
     cursor: pointer;
   }
-  button.secondary {
+  .progress button {
     background: transparent;
     color: var(--accent);
     border: 1px solid var(--accent);

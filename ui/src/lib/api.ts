@@ -4,7 +4,9 @@ import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import type {
   AppError,
   InstallOptions,
+  InstallStatus,
   OperationFinishedEvent,
+  OperationLogEntry,
   PackageDetail,
   PackageSummary,
   ProgressEvent,
@@ -49,7 +51,15 @@ export const api = {
   getAppDetail: (packageId: string) => call<PackageDetail>('get_app_detail', { packageId }),
   startInstall: (packageId: string, options?: InstallOptions) =>
     call<{ operation_id: string }>('start_install', { packageId, options }),
+  /** Cancels any running install / uninstall / update by operation id. */
   cancelInstall: (operationId: string) => call<void>('cancel_install', { operationId }),
+  startUninstall: (packageId: string) =>
+    call<{ operation_id: string }>('start_uninstall', { packageId }),
+  getInstallStatus: (packageId: string) =>
+    call<InstallStatus>('get_install_status', { packageId }),
+  /** Newest `limit` log entries for a package, oldest first. */
+  getOperationLog: (packageId: string, limit?: number) =>
+    call<OperationLogEntry[]>('get_operation_log', { packageId, limit }),
   checkUpdates: () => call<UpdateAvailable[]>('check_updates'),
   updateAll: () => call<UpdatesSummaryEvent>('update_all'),
   openStorePage: (productId: string) => call<void>('open_store_page', { productId }),

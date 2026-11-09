@@ -2,9 +2,12 @@
   import { onMount } from 'svelte'
   import { api } from './lib/api'
   import { operations } from './lib/operations.svelte'
+  import AppDetail from './routes/AppDetail.svelte'
   import Search from './routes/Search.svelte'
 
   let version = $state('...')
+  // Package shown on the detail page; null = search. Search stays mounted to keep its results.
+  let selected = $state<string | null>(null)
 
   onMount(() => {
     void operations.init()
@@ -20,7 +23,14 @@
     <h1>Store</h1>
     <small>Core v{version}</small>
   </header>
-  <Search />
+  <div hidden={selected !== null}>
+    <Search onopen={(id) => (selected = id)} />
+  </div>
+  {#if selected}
+    {#key selected}
+      <AppDetail id={selected} onback={() => (selected = null)} />
+    {/key}
+  {/if}
 </main>
 
 <style>
