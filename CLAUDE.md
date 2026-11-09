@@ -33,7 +33,7 @@ elevation). `tier:any` issues are reserved for community contributors on cheaper
 ## Status
 - Done on `main`: #1 scaffold + CI, #2 domain model + persistence, #3 community catalog
   (winget.run, PR #14), #4 winget executor + progress parser (PR #15). 149 tests, clippy/fmt clean.
-- Next: #5 (Tauri IPC layer + UI skeleton); then #6 (MVP). Follow-up #16: fresher catalog source.
+- #5 (Tauri IPC layer + UI skeleton) in PR; next #6 (MVP). Follow-up #16: fresher catalog source.
 - Repo: https://github.com/aniketbhoir-git/winstore-rs — GitHub issue numbers match
   `docs/ISSUE-BACKLOG.md`. Session prompts live in `docs/PROMPT-START.md`.
 
@@ -65,7 +65,8 @@ elevation). `tier:any` issues are reserved for community contributors on cheaper
   search coordinator with TTL cache (`detail_fetched_at`), winget.run v2 adapter (reqwest, httpmock tests).
 - `src-tauri/src/executor/{mod,winget_cli,winget_parse}.rs`, `tests/fixtures/fake_winget.rs` —
   `PackageExecutor` trait, winget subprocess wrapper, progress parser; the fake is a cargo example.
-- `ui/` — Vite + Svelte + TS skeleton; `invoke('app_version')` is the only command so far.
+- `src-tauri/src/ipc/{commands,events,state}.rs` — Tauri commands (`search_sources`, `get_app_detail`, `start_install`, `cancel_install`, `check_updates`, `update_all`, `open_store_page`, `start_server` stub), `store:*` events, lazy `AppState`/`Core`; handlers are plain async fns tested in `ipc/tests.rs`.
+- `ui/src/{lib,components,routes}` — typed API client + event subscriptions, `Search.svelte` (debounced), `AppCard`, `InstallButton`, `ProgressBar`, `SourceBadge`.
 
 ## Project skills
 - `winget-executor` — winget CLI facts, output/exit-code parsing, cancellation, fake-winget tests for #4 and #6 — `.claude/skills/winget-executor/SKILL.md`

@@ -1,28 +1,45 @@
 <script lang="ts">
-  import { invoke } from '@tauri-apps/api/core'
+  import { onMount } from 'svelte'
+  import { api } from './lib/api'
+  import { operations } from './lib/operations.svelte'
+  import Search from './routes/Search.svelte'
 
   let version = $state('...')
 
-  invoke<string>('app_version')
-    .then((v) => (version = v))
-    .catch(() => (version = 'unavailable'))
+  onMount(() => {
+    void operations.init()
+    api
+      .appVersion()
+      .then((v) => (version = v))
+      .catch(() => (version = 'unavailable'))
+  })
 </script>
 
 <main>
-  <h1>Store</h1>
-  <p>Catalog not loaded yet</p>
-  <small>Core v{version}</small>
+  <header>
+    <h1>Store</h1>
+    <small>Core v{version}</small>
+  </header>
+  <Search />
 </main>
 
 <style>
   main {
-    padding: 2rem;
+    max-width: 1100px;
+    margin: 0 auto;
+    padding: 1.5rem 2rem;
+  }
+  header {
+    display: flex;
+    align-items: baseline;
+    gap: 0.75rem;
+    margin-bottom: 1rem;
   }
   h1 {
     color: var(--accent);
-    margin: 0 0 0.5rem;
+    margin: 0;
   }
   small {
-    color: #6b6b70;
+    color: var(--muted);
   }
 </style>
