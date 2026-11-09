@@ -1,11 +1,6 @@
 //! Handler tests: mock catalog source, scripted executor (no winget, no network).
 
-use std::collections::VecDeque;
-use std::sync::atomic::{AtomicU32, Ordering};
-use std::sync::{Arc, Mutex};
-use std::time::Duration;
-
-use tokio::sync::{mpsc, oneshot};
+use std::sync::Arc;
 
 use super::commands::*;
 use super::events::testing::RecordingSink;
@@ -13,167 +8,14 @@ use super::events::{
     EVENT_OPERATION_FINISHED, EVENT_PROGRESS, EVENT_SEARCH_FAILED, EVENT_SEARCH_RESULTS,
     EVENT_UPDATES_SUMMARY,
 };
-use super::state::{AppState, Core, ExecutorFactory};
-use crate::catalog::{BoxFuture, Catalog, CatalogSource, SearchQuery};
-use crate::config::AppConfig;
-use crate::db::{self, repo::installs, DbPool};
-use crate::domain::package::fixtures;
-use crate::domain::{
-    InstallState, Operation, OperationStage, PackageDetail, PackageId, PackageSummary,
-    ProgressEvent, SourceCapabilities, SourceKind, UpdateAvailable,
-};
-use crate::error::{AppError, AppResult};
-use crate::executor::{
-    ExecFuture, InstallRequest, InstallScope, InstalledPackage, OperationHandle, PackageExecutor,
-};
-
-const KIND: SourceKind = SourceKind::WingetCommunity;
-const PKG: &str = "winget_community/Foo.Bar";
-
-struct FakeSource {
-    paid: bool,
-    down: bool,
-}
-
-impl CatalogSource for FakeSource {
-    fn kind(&self) -> SourceKind {
-        KIND
-    }
-    fn capabilities(&self) -> SourceCapabilities {
-        SourceCapabilities {
-            search: true,
-            detail: true,
-            ..SourceCapabilities::default()
-        }
-    }
-    fn search<'a>(&'a self, _q: &'a SearchQuery) -> BoxFuture<'a, AppResult<Vec<PackageSummary>>> {
-        let r = if self.down {
-            Err(AppError::SourceUnavailable("down".into()))
-        } else {
-            Ok(vec![fixtures::summary(KIND, "Foo.Bar", "Foo Bar")])
-        };
-        Box::pin(async move { r })
-    }
-    fn get_detail<'a>(&'a self, id: &'a str) -> BoxFuture<'a, AppResult<PackageDetail>> {
-        let mut d = fixtures::detail(KIND, id, "Foo Bar");
-        d.summary.is_paid = self.paid;
-        Box::pin(async move { Ok(d) })
-    }
-}
-
-type Script = (Vec<OperationStage>, AppResult<()>);
-
-/// Executor that replays scripted operations; no processes involved.
-#[derive(Default)]
-struct FakeExec {
-    script: Mutex<VecDeque<Script>>,
-    updates: Vec<UpdateAvailable>,
-    cancelled: Mutex<Vec<String>>,
-}
-
-impl FakeExec {
-    fn scripted(items: Vec<Script>) -> Self {
-        FakeExec {
-            script: Mutex::new(items.into()),
-            ..FakeExec::default()
-        }
-    }
-
-    fn handle(&self, id: &PackageId, op: Operation) -> OperationHandle {
-        let (stages, result) = self.script.lock().unwrap().pop_front().expect("script");
-        let (tx, events) = mpsc::channel(16);
-        let (otx, outcome) = oneshot::channel();
-        for (i, st) in stages.iter().enumerate() {
-            let f = (i + 1) as f32 / stages.len() as f32;
-            tx.try_send(ProgressEvent::new("op-1", id.clone(), op, *st, f, "m"))
-                .unwrap();
-        }
-        drop(tx);
-        let _ = otx.send(result);
-        OperationHandle {
-            operation_id: "op-1".into(),
-            events,
-            outcome,
-        }
-    }
-}
-
-impl PackageExecutor for FakeExec {
-    fn install<'a>(
-        &'a self,
-        p: &'a PackageId,
-        _r: &'a InstallRequest,
-    ) -> ExecFuture<'a, OperationHandle> {
-        Box::pin(async move { Ok(self.handle(p, Operation::Install)) })
-    }
-    fn cancel<'a>(&'a self, op: &'a str) -> ExecFuture<'a, ()> {
-        self.cancelled.lock().unwrap().push(op.to_string());
-        Box::pin(async { Ok(()) })
-    }
-    fn remove<'a>(&'a self, p: &'a PackageId) -> ExecFuture<'a, OperationHandle> {
-        Box::pin(async move { Ok(self.handle(p, Operation::Remove)) })
-    }
-    fn list_installed<'a>(&'a self) -> ExecFuture<'a, Vec<InstalledPackage>> {
-        Box::pin(async { Ok(vec![]) })
-    }
-    fn list_updates<'a>(&'a self) -> ExecFuture<'a, Vec<UpdateAvailable>> {
-        let u = self.updates.clone();
-        Box::pin(async move { Ok(u) })
-    }
-    fn update<'a>(&'a self, p: &'a PackageId) -> ExecFuture<'a, OperationHandle> {
-        Box::pin(async move { Ok(self.handle(p, Operation::Update)) })
-    }
-    fn pin<'a>(&'a self, _p: &'a PackageId) -> ExecFuture<'a, ()> {
-        Box::pin(async { Ok(()) })
-    }
-    fn unpin<'a>(&'a self, _p: &'a PackageId) -> ExecFuture<'a, ()> {
-        Box::pin(async { Ok(()) })
-    }
-    fn is_available<'a>(
-        &'a self,
-    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = bool> + Send + 'a>> {
-        Box::pin(async { true })
-    }
-}
-
-async fn state_with(paid: bool, down: bool, factory: ExecutorFactory) -> (AppState, DbPool) {
-    let pool = db::init_memory_pool().await.unwrap();
-    db::run_migrations(&pool).await.unwrap();
-    let catalog = Catalog::new(
-        vec![Arc::new(FakeSource { paid, down })],
-        Some(pool.clone()),
-        3600,
-    );
-    let core = Core::new(pool.clone(), catalog, AppConfig::default(), factory);
-    (AppState::with_core(core), pool)
-}
-
-fn exec_factory(exec: FakeExec) -> ExecutorFactory {
-    shared_exec_factory(Arc::new(exec))
-}
-
-/// Keeps a handle on the fake so a test can inspect what the executor received.
-fn shared_exec_factory(exec: Arc<FakeExec>) -> ExecutorFactory {
-    let exec: Arc<dyn PackageExecutor> = exec;
-    Arc::new(move || {
-        let e = Arc::clone(&exec);
-        Box::pin(async move { Ok(e) })
-    })
-}
-
-fn id() -> PackageId {
-    PackageId::new(KIND, "Foo.Bar")
-}
-
-async fn wait_for(sink: &RecordingSink, event: &str) -> serde_json::Value {
-    for _ in 0..300 {
-        if let Some(v) = sink.named(event).into_iter().next() {
-            return v;
-        }
-        tokio::time::sleep(Duration::from_millis(10)).await;
-    }
-    panic!("event {event} never arrived");
-}
+use super::state::ExecutorFactory;
+use super::test_support::*;
+use crate::catalog::SearchQuery;
+use crate::db::repo::installs;
+use crate::domain::{InstallState, OperationStage, PackageId, UpdateAvailable};
+use crate::error::AppError;
+use crate::executor::InstallScope;
+use std::sync::atomic::{AtomicU32, Ordering};
 
 #[tokio::test]
 async fn search_returns_and_streams_results() {
