@@ -7,6 +7,7 @@ Open-source Rust + Tauri 2 app storefront and package-manager front end for Wind
 - `docs/SPEC.md` — implementation spec (interfaces, modules, work packages)
 - `docs/STRATEGY.md` — rationale and scope
 - `docs/ISSUE-BACKLOG.md` — work items and their acceptance criteria
+- `docs/reviews/2026-11-11-spec-review.md` — open defects in SPEC.md (actions A1 to A25)
 
 ## Non-negotiable rules
 - Positive, neutral terminology. Stay strictly within public, documented interfaces
@@ -30,11 +31,29 @@ Rust stable · Tauri 2 · Svelte/TypeScript · SQLite (sqlx) · tokio · windows
 This environment runs `tier:max` issues (winget parser, install loop, msstore adapter,
 elevation). `tier:any` issues are reserved for community contributors on cheaper models.
 
-## Status
+## Status (2026-11-11)
 - Done on `main`: #1 scaffold + CI, #2 domain model + persistence, #3 community catalog
   (winget.run, PR #14), #4 winget executor + progress parser (PR #15), #5 Tauri IPC layer + UI
-  skeleton (PR #18). 163 tests, clippy/fmt clean.
-- Next: #6 (detail page + full install loop, the MVP). Follow-up #16: fresher catalog source.
+  skeleton (PR #18).
+- Built, not merged: #6 (detail page, install/uninstall/cancel, log tail) on
+  `impl/6--install-loop`, PR #19. Do not merge it before review actions A2 and A4 are closed.
+- `docs/SPEC.md` was reviewed on 2026-11-11: 6 blockers. Read
+  `docs/reviews/2026-11-11-spec-review.md` before any work. Where SPEC.md and the code
+  disagree, stop and report; do not rebuild code that exists.
+- Known bug: search returns unrelated results (the winget.run service does). See F1 in
+  `docs/ISSUE-BACKLOG.md`; it raises #16 to an MVP blocker.
+- Requirement: all testing must run unattended, for contributors also. See F2.
+- Next: the "Review follow-ups" section of `docs/ISSUE-BACKLOG.md`, in the order the review
+  file suggests.
+
+## Design workflow — Elephant-Goldfish Model (EGM)
+- Design decisions go through the `egm` plugin. Its skills are user-invoked: name the command
+  and ask the maintainer to run it. Do not start them yourself.
+  `/egm:egm-brainstorm`, `/egm:egm-draft`, `/egm:egm-review <doc>`, `/egm:egm-drift-report <dir>`.
+- A feature with a design document or a multi-step plan gets a review before code. A bug fix
+  or a small change does not.
+- Approved design documents go in `docs/designs/`. Review results go in `docs/reviews/`.
+  Decision records go in `docs/adr/`.
 - Repo: https://github.com/aniketbhoir-git/winstore-rs — GitHub issue numbers match
   `docs/ISSUE-BACKLOG.md`. Session prompts live in `docs/PROMPT-START.md`.
 

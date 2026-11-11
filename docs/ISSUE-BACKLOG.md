@@ -170,3 +170,54 @@ Suggested order: **#1 → #2 → (#3 ∥ #4) → #5 → #6 (MVP)** — everythin
 - **Acceptance:** elevation path works; scheduled scan produces a toast; import replays a
   manifest list.
 - **LLM note:** `tier:max` (Windows platform APIs).
+---
+
+## Review follow-ups (2026-11-11)
+
+Source: `docs/reviews/2026-11-11-spec-review.md` (action ids A1 to A25) and a manual test of
+the `impl/6--install-loop` build. These items have no GitHub issue yet unless a number is given.
+Design work on them uses the Elephant-Goldfish Model; see `CLAUDE.md`, "Design workflow".
+
+### F1 — Search returns unrelated results (bug, blocks the MVP)
+- **Labels:** `tier:max`, `size:M`, `area:catalog`
+- **Relates to:** #16 (fresher catalog source), review action A14
+- **Symptom:** a search for "vlc" in the UI shows unrelated apps.
+- **Cause:** upstream. `GET https://api.winget.run/v2/packages?query=vlc&take=5` returns Flock
+  and f.lux. The rows were last updated in 2023. `sources/winget_repo.rs` passes the query
+  correctly and trusts the order the service returns. The cache in `catalog/mod.rs` then keeps
+  those rows for the TTL.
+- **Decision needed first:** the community catalog backend. Options to compare in a decision
+  record: `winget search` and `winget show` through the existing executor; the official winget
+  source index; another REST mirror. Close #16 with that record.
+- **Acceptance:** a search for "vlc" returns `VideoLAN.VLC` in the first 3 results. A search
+  for a string with no match returns an empty list. An automated test covers both and does
+  not depend on a live third-party service.
+
+### F2 — Automated, unattended testing for contributors (requirement, needs a design)
+- **Labels:** `tier:max`, `size:L`, `area:infra`
+- **Relates to:** SPEC §8, review action A20
+- **Requirement (maintainer, 2026-11-11):** all testing runs with no person present. A
+  contributor who gives model tokens to the project can run the same tests with one command
+  and get a pass or fail result.
+- **State today:** `cargo test` (unit, HTTP mock, fake winget) runs unattended in CI. The
+  real-winget smoke test `tests/winget_smoke.rs` is `#[ignore]` and needs owner approval. No
+  UI test and no end-to-end job exist. Manual checks in SPEC §8 have no automated form.
+- **Open design questions:**
+  1. Where do real installs run? A contributor machine must not get software installed on it
+     by a test. Options: CI runner only; Windows Sandbox; a disposable VM.
+  2. How does a test drive the UI? Options: WebDriver through `tauri-driver`; UI tests against
+     a mocked IPC layer; handler-level tests only.
+  3. How do pull requests from forks run the end-to-end job without access to secrets?
+  4. Which checks gate a merge, and which run on a schedule?
+  5. What does the one command look like, and what report does it write?
+- **Next step:** a design document in `docs/designs/`, reviewed before any code.
+
+### F3 — Review blockers on the spec
+Fix these in `docs/SPEC.md` before more work packages start. Details are in the review file.
+- **A1:** §6.3 names `winget upgrade --all` as the update check. The code is safe; fix the text.
+- **A2:** agreement consent model, and a UI path to give consent. Blocks the close of #6.
+- **A3:** the spec does not show what is built. Add a status per work package; correct WP3;
+  record the WP5 commands.
+- **A4:** state transition table for cancel, failure and conflict. Blocks the close of #6.
+- **A5:** headless mode needs a decision record before #11 starts.
+- **A6:** the msstore source is reached through winget only. Settle before #8 starts.
