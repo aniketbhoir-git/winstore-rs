@@ -221,3 +221,6 @@ Fix these in `docs/SPEC.md` before more work packages start. Details are in the 
 - **A4:** state transition table for cancel, failure and conflict. Blocks the close of #6.
 - **A5:** headless mode needs a decision record before #11 starts.
 - **A6:** the msstore source is reached through winget only. Settle before #8 starts.
+
+Decided on 2026-11-11 — **A7 (phases):** the SPEC §7 order is the schedule. Update-all follows
+the MVP and headless stays in Phase 3. `docs/STRATEGY.md` §1.2 and §1.3 now agree.
