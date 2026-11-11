@@ -214,11 +214,15 @@ Design work on them uses the Elephant-Goldfish Model; see `CLAUDE.md`, "Design w
 
 ### F3 — Review blockers on the spec
 Fix these in `docs/SPEC.md` before more work packages start. Details are in the review file.
-- **A1:** §6.3 names `winget upgrade --all` as the update check. The code is safe; fix the text.
-- **A2:** agreement consent model, and a UI path to give consent. Blocks the close of #6.
-- **A3:** the spec does not show what is built. Add a status per work package; correct WP3;
-  record the WP5 commands.
-- **A4:** state transition table for cancel, failure and conflict. Blocks the close of #6.
+- **A1:** ✅ spec text fixed on 2026-11-11 (§6.3, §5.2). The code was safe.
+- **A2:** ✅ consent model defined in SPEC §6.6 on 2026-11-11. The code is not built: the consent
+  dialog, the `accept_source_agreement` command, the per-operation option, and the removal of
+  the global config flag. This work blocks the close of #6.
+- **A3:** ✅ spec text fixed on 2026-11-11: document status note, §3 differences, §5.4 command
+  table, §7 status table, WP3 cancel text.
+- **A4:** ✅ transition tables in SPEC §6.7 on 2026-11-11, as built. One WP5 gap blocks the close
+  of #6: a cancel that cannot stop the process tree is not reported to the UI.
+- The repaired SPEC.md needs `/egm:egm-review docs/SPEC.md` before code starts on §6.6.
 - **A5:** headless mode needs a decision record before #11 starts.
 - **A6:** the msstore source is reached through winget only. Settle before #8 starts.
 
