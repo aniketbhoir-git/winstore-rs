@@ -178,7 +178,7 @@ Source: `docs/reviews/2026-11-11-spec-review.md` (action ids A1 to A25) and a ma
 the `impl/6--install-loop` build. These items have no GitHub issue yet unless a number is given.
 Design work on them uses the Elephant-Goldfish Model; see `CLAUDE.md`, "Design workflow".
 
-### F1 — Search returns unrelated results (bug, blocks the MVP)
+### F1 — Search returns unrelated results (bug, blocks the MVP) — GitHub #20
 - **Labels:** `tier:max`, `size:M`, `area:catalog`
 - **Relates to:** #16 (fresher catalog source), review action A14
 - **Symptom:** a search for "vlc" in the UI shows unrelated apps.
@@ -193,7 +193,7 @@ Design work on them uses the Elephant-Goldfish Model; see `CLAUDE.md`, "Design w
   for a string with no match returns an empty list. An automated test covers both and does
   not depend on a live third-party service.
 
-### F2 — Automated, unattended testing for contributors (requirement, needs a design)
+### F2 — Automated, unattended testing for contributors (requirement, needs a design) — GitHub #21
 - **Labels:** `tier:max`, `size:L`, `area:infra`
 - **Relates to:** SPEC §8, review action A20
 - **Requirement (maintainer, 2026-11-11):** all testing runs with no person present. A
