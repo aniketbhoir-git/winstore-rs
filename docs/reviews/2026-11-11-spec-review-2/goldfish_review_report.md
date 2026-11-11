@@ -1,5 +1,6 @@
 # Goldfish Annotated Review Report
-n**Status: resolved** (2026-11-11: 24 fixes applied to `docs/SPEC.md`; Issue 21 escalated; Issue 26 declined)
+
+**Status: resolved** (2026-11-11: 24 fixes applied to `docs/SPEC.md`; Issue 21 escalated; Issue 26 declined)
 
 **Target:** `docs/SPEC.md` (lines 1-454, commit `961b63d`)
 **Source of findings:** `critic_report.md` (Stage 7, round 1), ids K1 to K21, N-A, N-B.
