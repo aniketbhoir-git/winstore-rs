@@ -1,56 +1,59 @@
-# Open-Source Windows App Storefront — LLM Implementation Specification
+# Store — implementation specification
 
-> **Purpose:** this document is a hand-off spec for a coding LLM (e.g. Claude Sonnet 4.5 on
-> OpenRouter). It contains **no code** — only precise, step-by-step instructions about how the
-> application works and how the code should be generated, structured, and verified.
+> **Objective:** Store is an open-source desktop app for Windows that finds, installs, updates
+> and removes applications through the Windows Package Manager (winget). This document defines
+> how the app works: its rules, its data, its commands and its work packages. It contains no
+> code.
+
+> **Status of this document (2026-11-11):** WP0 to WP4 are on `main`. WP5 is on branch
+> `impl/6--install-loop` (PR #19, open). WP6 to WP11 are not started. §7 gives the status of
+> each work package.
 >
-> **It is written to be safe to paste into any model:** it describes a legitimate, independent,
-> open-source application manager and storefront for Windows built on public, documented, and
-> community-maintained interfaces (winget, MSIX, package deployment APIs). It deliberately uses
-> positive, neutral terminology and asks for nothing beyond the stated scope. Instruct the
-> coding LLM to implement exactly against the interfaces named here.
-
-> **Status of this document (2026-11-11):** for work packages WP0 to WP5 this document is the
-> contract for the code that exists. For WP6 to WP11 it is the plan. §7 gives the status of each
-> work package. Where the text and the code of a built work package disagree, the code is the
-> fact: stop, report the difference, and correct this document. Do not rebuild code that exists.
-> winget flags, exit codes and output formats are in the `winget-executor` skill
-> (`.claude/skills/winget-executor/SKILL.md`), not here. Open review actions are in
-> `docs/reviews/2026-11-11-spec-review.md`.
+> - A section marked *built* is the contract for code that exists. Where it and the code
+>   disagree, the code is the fact: stop, report the difference, and correct this document. Do
+>   not rebuild code that exists.
+> - A section marked *planned* is the plan. It overrides the code.
+> - winget flags, exit codes and output formats are in the `winget-executor` skill
+>   (`.claude/skills/winget-executor/SKILL.md`), not here. **Exception:** for agreement flags,
+>   §6.6 overrides the skill until WP5 updates the skill.
+> - Open review actions (ids A1 to A25) are in `docs/reviews/2026-11-11-spec-review.md`.
 
 ---
 
-## 0. Terminology & ground rules (give these to the coding LLM)
+## 0. Terminology & ground rules
 
-Use these terms only:
-
-Use this terminology and framing throughout, keeping every description positive and within
-public, documented interfaces:
+Use these terms:
 
 - winget (Windows Package Manager) CLI and its sources
 - winget community manifest repository (`microsoft/winget-pkgs`)
-- winget `msstore` source — the Store catalog REST service that winget itself uses
+- winget `msstore` source, reached only through the winget CLI. It is off by default; the user
+  turns it on. On failure it returns `SourceUnavailable`.
 - MSIX / AppX package deployment via the Windows Deployment API
 - Public catalog metadata (name, version, publisher, screenshots, ratings)
-- "Buy in Microsoft Store" browser hand-off (https://apps.microsoft.com/detail/{productId})
-- winget community REST catalogs (`winget-api.dev`, `winget.run`)
+- "Buy in Microsoft Store" browser hand-off (`https://apps.microsoft.com/detail/{productId}`)
+- The community catalog backend named in `docs/adr/0001-community-catalog-backend.md`. Until
+  that record is accepted, the code reads `https://api.winget.run`, which returns stale rows
+  (bug F1 in `docs/ISSUE-BACKLOG.md`).
 
 Out of scope, never to be implemented or researched further: payment, account sign-in, and
 any licensing/entitlement or content-protection system. When a paid item appears, the only
 supported action is the official browser hand-off.
 
-Hard rules for the generated code:
+Hard rules:
 
 1. No payment, account sign-in, or licensing/entitlement handling of any kind. Any item flagged
    `is_paid=true` shows only a call-to-action that opens the official product page in the
-   user's default browser (https://apps.microsoft.com/detail/{productId} or
-   ms-windows-store://pdp/?ProductId={productId}).
+   user's default browser (`https://apps.microsoft.com/detail/{productId}` or
+   `ms-windows-store://pdp/?ProductId={productId}`).
 2. Catalog sources only ever read public, machine-readable data over HTTPS. Never touch or
    attempt to authenticate against or scrape account/proprietary service internals.
-3. Product name/branding must be original; do not reference Microsoft Store trademarks, logos,
-   or artwork in the shipped app.
+3. The product name and branding are original. Do not use Microsoft logos or artwork. The text
+   label "Buy in Microsoft Store" on the hand-off button is permitted.
 4. Every destructive-or-silent installer action must originate from an explicit user click and
    respect winget's own source/package agreements (surface them; never pre-accept silently).
+   §6.6 defines the consent flow.
+5. No telemetry. The app makes network calls only to the catalogs that the user turned on, and
+   through winget.
 
 ---
 
@@ -58,7 +61,7 @@ Hard rules for the generated code:
 
 A desktop application for Windows that finds, installs, updates, pins, and removes applications,
 backed by a pluggable set of *sources* (catalogs) and *executors* (installs/removals).
-Eventually it also exposes a small local web UI for managing headless Windows Server machines.
+WP10 adds a mode for headless Windows Server machines; its design is not decided (§6.5).
 
 ### 1.1 Layers
 
@@ -66,8 +69,8 @@ Eventually it also exposes a small local web UI for managing headless Windows Se
    a modern app store (cards, app detail pages, progress).
 2. **IPC boundary** — typed Tauri commands; the frontend never talks to winget or the network
    directly; all state changes flow through the Rust core and are pushed back as events.
-3. **Rust core** — domain model, sources, executors, services, persistence, and the optional
-   local web server. Single crate under `src-tauri/`.
+3. **Rust core** — domain model, sources, executors, services and persistence. Single crate
+   under `src-tauri/`.
 4. **Platform glue** — Windows elevation, toasts, scheduled update scan, winget discovery.
 5. **Persistence** — SQLite for cache, install state, settings, and an operation log.
 
@@ -77,59 +80,119 @@ Eventually it also exposes a small local web UI for managing headless Windows Se
 - Long operations (install/update) run as cancellable tasks; each emits a stream of
   `ProgressEvent` records that the IPC layer relays to the frontend as events.
 - At most one mutating operation per package id at a time; a global `OpGuard` (per-package
-  `Mutex` map) prevents races.
+  `Mutex` map) prevents two operations on the same package id.
+- The lock is per package and lives in one process. It does not stop two installs of
+  different packages, and it does not cover a second app instance. §6.7 lists the two gaps.
 
 ### 1.3 Error model
 
-- One crate-wide error enum with variants: `Io`, `Sql`, `Http`, `WingetNotFound`,
-  `WingetFailed(code, stderr)`, `SourceUnavailable`, `PackageNotFound`, `DeploymentFailed`,
-  `Cancelled`, `Unsupported`, `ElevationRequired`, `InvalidConfig`,
-  `AgreementsRequired { source_agreements, package_agreements }` (code `agreements_required`;
-  see §6.6).
+- `AppError` is the one crate-wide error enum. Each variant has a stable string code:
+
+  | Variant | Code | Retryable |
+  |---|---|---|
+  | `Io` | `io` | Yes |
+  | `Sql` | `sql` | Yes |
+  | `Http` | `http` | Yes |
+  | `WingetNotFound` | `winget_not_found` | No |
+  | `WingetFailed { code, stderr }` | `winget_failed` | Yes |
+  | `SourceUnavailable` | `source_unavailable` | Yes |
+  | `PackageNotFound` | `package_not_found` | No |
+  | `DeploymentFailed` | `deployment_failed` | No |
+  | `Cancelled` | `cancelled` | No |
+  | `Unsupported` | `unsupported` | No |
+  | `ElevationRequired` | `elevation_required` | No |
+  | `InvalidConfig` | `invalid_config` | No |
+  | `AgreementsRequired { source_agreements, package_agreements }` | `agreements_required` | No |
+
 - Every error maps to: (stable string `code`, human message, optional raw detail for logs,
   is_retryable flag). IPC returns this as JSON; logs record the raw detail.
+- In one `AgreementsRequired` error, exactly one of the two fields is true. winget reports one
+  kind of agreement at a time.
+
+### 1.4 Goals and non-goals
+
+Goals, in the order of the work packages:
+
+1. Search a community catalog and install, uninstall and cancel from the UI (WP0 to WP5, the
+   MVP).
+2. Show installed apps and update them (WP6).
+3. Show Microsoft Store items; a paid item gets the browser hand-off only (WP7).
+4. More sources, a headless mode and platform integration (WP8 to WP11).
+
+The reasons and the users are in `docs/STRATEGY.md` §1.2 (feature triage) and §1.3 (use cases).
+
+Non-goals:
+
+- Payment, account sign-in, licensing. See hard rule 1.
+- Installer logic of our own. winget runs each installer.
+- Telemetry. See hard rule 5.
+- A catalog service that the project hosts. ADR 0001 keeps this as a later option.
 
 ---
 
-## 2. Locked technology decisions
+## 2. Technology decisions
 
 | Concern | Decision |
 |---|---|
 | UI shell | Tauri 2 + WebView2 |
-| Frontend framework | Svelte (or React if preferred) + TypeScript; plain CSS with a light/dark Fluent-like theme |
+| Frontend framework | Svelte + TypeScript; plain CSS with a light/dark Fluent-like theme |
 | Backend language | Rust (stable) |
 | Async | tokio |
 | HTTP | reqwest + serde/serde_json |
 | Persistence | SQLite via sqlx (async) with embedded migrations |
-| Windows APIs | official `windows` crate (Deployment `PackageManager`, notifications, AppModel) |
-| Install/remove engine (primary) | winget CLI invoked as a subprocess for install/update/remove |
-| Install/remove engine (secondary) | `Windows.Management.Deployment.PackageManager` for direct MSIX add/remove |
-| Optional sources | Scoop, Chocolatey (their CLIs as subprocess executors) |
-| Headless mode | axum web server exposing the same core services as a localhost HTTP/JSON API |
+| Windows APIs | official `windows` crate (notifications, AppModel) |
+| Install/remove engine | winget CLI invoked as a subprocess for install/update/remove |
 | Logging | tracing; operation log mirrored into SQLite |
 
-Rationale to record for the LLM: winget already solves installer execution, hash/agreement
-handling, dependencies, and MSIX deployment correctly; wrapping it is far safer than
-reimplementing installer logic. The catalog layer is kept separate (pure HTTP) so search is
-fast and typed rather than scraping winget's human-readable output.
+Rationale: winget handles installer execution, hash checks, agreements, dependencies and MSIX
+deployment. The app wraps it and does not write installer logic.
+
+### 2.1 Deferred, needs a decision
+
+These items are not decided. Do not build them and do not add their dependencies.
+
+| Item | Work package | Waits for |
+|---|---|---|
+| Headless mode and its web server (axum was the first idea) | WP10 | A decision record (review action A5) |
+| A second executor: `Windows.Management.Deployment.PackageManager` for a local MSIX file | WP11 | Review action A9. v1 has one executor, chosen by `SourceKind`. |
+| Scoop and Chocolatey sources and executors | WP9 | WP9 start |
+
+### 2.2 Alternatives considered
+
+| Decision | Options | Status |
+|---|---|---|
+| UI shell | Tauri 2 against other Rust UI toolkits | Decided. See `docs/STRATEGY.md` §2.3. |
+| Community catalog backend | (a) the `winget.run` REST mirror, in the code today; (b) `winget search` and `winget show` through the executor; (c) the official winget index file; (d) the winget COM API; (e) a catalog that the project builds | Proposed: (b). See `docs/adr/0001-community-catalog-backend.md`. (a) returns stale rows. (c) has no documented format. |
+| Executor interface | (a) the winget CLI, built; (b) the winget COM API `Microsoft.Management.Deployment` | (a) is built and stays. (b) gives typed progress and a cancel call, and removes text parsing. It needs generated bindings, and access from an app with no package identity is not verified. Open; decide before WP6. |
+| Headless shape | A local web server, a command-line tool, or remote desktop only | Open (review action A5). |
+
+### 2.3 Risks and mitigations
+
+`docs/STRATEGY.md` §5 holds the project risks. This table holds the risks that this design
+adds.
+
+| Risk | Mitigation or owner |
+|---|---|
+| The app accepts an agreement that the user did not see. | §6.6: the app stores no consent and passes a flag only directly after a user "Accept". |
+| winget gives no agreement text without an interactive prompt, so the consent dialog has nothing to show. | The spike in §6.6 comes first in WP5. A fallback is named there and needs maintainer approval. |
+| The third-party catalog is stale or wrong (bug F1). | ADR 0001. Until it is accepted, the search results are not reliable. |
+| winget prints text with no format contract. A winget update or a non-English Windows can break a parser. | Parse by column position, not by header words. Keep a recorded-output fixture per supported winget version. On a parse failure, show an indeterminate progress bar and let the exit code decide. |
+| Two installs of different packages run together and Windows Installer refuses the second one (error 1618). | One queue for operations that change the system; WP6 (§6.7 gap table). |
+| A second app instance uses the same ledger with a separate lock. | One app instance only; WP6 (§6.7 gap table). |
+| Remote icons and screenshots send the user's IP address to other hosts. | A content security policy that permits HTTPS images only. The image proxy decision is in WP8. |
+| A local web API that installs software can be reached by a web page in a local browser. | §6.5: nothing is built before a decision record. |
 
 ---
 
 ## 3. Repository layout (target)
 
-The tree shows the target layout. A path exists only when its work package is built. The layout
-as built is in `CLAUDE.md`, "Layout (as built)". Differences on 2026-11-11:
+The tree shows the target layout. A comment "WPn" marks a path that does not exist before that
+work package. A path with no such mark exists. `CLAUDE.md`, "Layout (as built)", describes the
+built files in more detail.
 
-- Not created yet (the work package that creates each one): `services/upgrade.rs`,
-  `services/library.rs` (WP6); `sources/msstore.rs` (WP7); `sources/scoop.rs`,
-  `sources/choco.rs`, `executor/scoop_cli.rs`, `executor/choco_cli.rs` (WP9); `server/` (WP10);
-  `platform/`, `services/schedule.rs`, `executor/package_manager.rs` (WP11).
-- `services/search.rs` is not planned. Search lives in `catalog/mod.rs` and `catalog/search.rs`.
-- The update scan and update-all live in `ipc/commands.rs` (`run_check_updates`,
-  `run_update_all`) until WP6 moves them to `services/upgrade.rs`.
-- Built and not in the tree: `executor/winget_parse.rs` (progress parser, exit-code map),
-  `db/repo/*.rs` (repositories), `ipc/test_support.rs` (shared test fakes).
-- `ui/src/routes/` holds `Search` and `AppDetail` only.
+The update scan and update-all live in `ipc/commands.rs` (`run_check_updates`,
+`run_update_all`) until WP6 moves them to `services/upgrade.rs`. `ui/src/routes/` holds `Search`
+and `AppDetail` only.
 
 ```text
 src-tauri/
@@ -137,84 +200,96 @@ src-tauri/
   tauri.conf.json
   src/
     main.rs            # entry: Tauri builder, plugin registration, logging init
-    lib.rs             # module re-exports (Tauri mobile convention)
-    error.rs           # unified error enum + display + serialization
+    lib.rs             # module list and command registration
+    error.rs           # AppError, display, serialization
     config.rs          # user config load/save, defaults
     domain/
       package.rs       # PackageSummary, PackageDetail, SourceKind, PackagingKind
-      source.rs        # CatalogSource trait + SourceCapabilities
-      install.rs       # InstallState, PackageVersion, UpdateAvailable
-      progress.rs      # ProgressEvent (op, package_id, stage, fraction, message)
+      source.rs        # source record types
+      install.rs       # InstallState and its legal transitions, UpdateAvailable
+      progress.rs      # ProgressEvent (fields in §4.2)
     db/
       mod.rs           # pool init
       migrations/      # ordered SQL migrations
       models.rs        # row <-> domain mapping
+      repo/            # repositories: installs, operation_log, packages, settings, sources
     catalog/
-      mod.rs           # coordinator: fan-out search across enabled sources, merge/dedupe
-      search.rs        # query model (text, category, source, sort, page)
+      mod.rs           # CatalogSource trait; search coordinator and cache
+      search.rs        # query model
     sources/
-      winget_repo.rs   # community manifest catalog via REST
-      msstore.rs       # winget msstore source (Store catalog) — best-effort
-      scoop.rs         # Scoop buckets
-      choco.rs         # Chocolatey community feed
+      winget_repo.rs   # community catalog via REST (pending ADR 0001)
+      msstore.rs       # WP7: winget msstore source, through the winget CLI only
+      scoop.rs         # WP9
+      choco.rs         # WP9
     executor/
-      mod.rs           # PackageExecutor trait + registry
-      winget_cli.rs    # winget subprocess wrapper + output parser + progress
-      package_manager.rs# direct MSIX deployment via windows crate
-      scoop_cli.rs
-      choco_cli.rs
+      mod.rs           # PackageExecutor trait, OpGuard
+      winget_cli.rs    # winget subprocess wrapper, process-tree stop
+      winget_parse.rs  # progress parser, exit-code map, table parser
+      package_manager.rs # WP11: local MSIX file (deferred, §2.1)
+      scoop_cli.rs     # WP9
+      choco_cli.rs     # WP9
     services/
-      search.rs        # search orchestration + cache
-      install.rs       # install/remove/cancel lifecycle
-      upgrade.rs       # update scan + update one/all
-      library.rs       # installed app list + local state
-      schedule.rs      # scheduled update scan (background)
+      install.rs       # install/remove/cancel lifecycle, restart recovery
+      upgrade.rs       # WP6: update scan, update one/all
+      library.rs       # WP6: installed app list
+      schedule.rs      # WP11: scheduled update scan
     ipc/
       commands.rs      # every #[tauri::command] handler
       events.rs        # event names + payload types
       state.rs         # AppState dependency graph
+      tests.rs         # handler tests
+      test_support.rs  # shared test fakes: FakeSource, FakeExec
     platform/
-      windows.rs       # elevation, toast, winget discovery, scheduled task
-    server/
-      mod.rs           # feature-gated axum server
-      api.rs           # HTTP/JSON routes over the same core
-      state.rs         # shared core state for the web UI
+      windows.rs       # WP11: elevation, toast, scheduled task
+    server/            # WP10: deferred (§6.5)
+  tests/               # integration tests; fixtures/fake_winget.rs is the fake winget
 ui/
   src/
     lib/               # typed API client for Tauri commands + event subscription
     components/        # AppCard, DetailHeader, InstallButton, ProgressBar, SourceBadge,
                        # RatingStars, UpdateRow, BuyInStoreButton, SourcePicker
-    routes/            # Search, AppDetail, Library, Updates, Settings, Remote
+    routes/            # Search, AppDetail; WP6: Library, Updates, Settings
   index.html
 docs/
   adr/                 # short decision records
-  api-notes/           # notes on each catalog endpoint shape (for humans)
+  designs/             # design documents
+  reviews/             # review results
 ```
 
 ---
 
-## 4. Domain & data model (describe; the LLM turns this into structs + SQL)
+## 4. Domain & data model
 
 ### 4.1 Enumerations
 - `SourceKind`: WingetCommunity, MsStore, Scoop, Chocolatey.
 - `PackagingKind`: Msix, MsixBundle, Exe, Msi, Portable, Unknown.
 - `InstallState`: NotInstalled, Installing, Installed, UpdateAvailable, Uninstalling, Failed, Pinned.
+  `UpdateAvailable` and `Pinned` are reserved: no code writes them before WP6 (review action
+  A10).
 - `OperationStage`: queued, resolving, downloading, installing, finalizing, done, failed, cancelled.
 
-### 4.2 Core structs (fields only — LLM writes the Rust)
+### 4.2 Core structs (fields only)
 - `PackageSummary`: id (stable, e.g. `src/pkg`), name, publisher, latest version, one-line
-  description, icon url, rating, rating count, source kind, is_paid, packaging kind.
+  description, icon url, rating, rating count, source kind, is_paid, packaging kind,
+  store product id (optional; WP7 adds it).
 - `PackageDetail`: everything in Summary plus full description, screenshots, website, license,
   release notes, installer metadata (architecture, install type, size, sha256), map of
   available versions.
 - `ProgressEvent`: operation id, package id, operation, stage, fraction (0.0–1.0), message,
   timestamp.
-- `UpdateAvailable`: package id, installed version, latest version, source, is_auto.
+- `UpdateAvailable`: package id, installed version, latest version, source.
+- `OperationStarted`: operation id.
+- `InstallStatus`: package id, state, installed version, target version, pinned, last updated,
+  and the active operation (operation id and kind) when one runs.
+- `OperationLogEntry`: id, time, level, operation, package id, message, detail.
+- `UpdatesSummaryEvent`: total, succeeded, failed, and one outcome per package (package id, ok,
+  message).
 
 ### 4.3 SQLite schema (tables)
 - `packages` — cached catalog rows; key `(source, package_id)`; `fetched_at` for TTL.
 - `installs` — local install ledger: package id, state, installed_version, target_version,
-  pinned, auto_update, last_update_check, last_updated.
+  pinned, last_update_check, last_updated. The table also has an `auto_update` column; no
+  work package defines automatic updates, and no code may use the column.
 - `sources` — enabled/disabled, priority, kind, extra config, last_sync.
 - `settings` — key/value: theme, cache_ttl, update interval, default source exclusions.
 - `operation_log` — id, ts, level, operation, package_id, message, detail (for UI "log" pane).
@@ -224,10 +299,10 @@ repository functions; migrations are additive and versioned.
 
 ---
 
-## 5. Service contracts (traits — LLM writes signatures, not bodies here)
+## 5. Service contracts
 
 ### 5.1 `CatalogSource`
-Methods (exact names the LLM should use): `search(query)`, `get_detail(package_id)`,
+Methods: `search(query)`, `get_detail(package_id)`,
 `get_featured(limit)`, `list_categories()`, `capabilities()`.
 Every method returns our domain types and an `AppError`. Sources declare a `SourceKind` and a
 human display name. Rate limits and timeouts live inside each adapter.
@@ -236,7 +311,7 @@ human display name. Rate limits and timeouts live inside each adapter.
 Methods: `install(package, request) -> stream of ProgressEvent`, `cancel(operation_id)`,
 `remove(package) -> stream of ProgressEvent`, `list_installed()`, `list_updates()`,
 `update(package) -> stream`, `pin(package)`, `unpin(package)`, `is_available()`.
-Executors are registered per source and selected by `PackagingKind`/capability.
+The executor is chosen by `SourceKind`. v1 has one executor.
 Only `install`, `remove`, `update`, `pin` and `unpin` may change the system. `list_installed`,
 `list_updates` and `is_available` are read-only: they must not install, update or remove
 anything.
@@ -246,7 +321,7 @@ anything.
   dedupes by normalized name+publisher, sorts, applies cache TTL, paginates.
 - Install/update delegates to the executor implied by the package's source/packaging kind.
 
-### 5.4 IPC commands and events (as built, WP4 and WP5)
+### 5.4 IPC commands and events (WP4 and WP5, built)
 
 All handlers are in `ipc/commands.rs`. Each one wraps a plain async function that the tests in
 `ipc/tests.rs` call. A new command needs a row here in the same pull request.
@@ -267,7 +342,7 @@ All handlers are in `ipc/commands.rs`. Each one wraps a plain async function tha
 | `start_server` | `port` | error `unsupported` | Stub until WP10. |
 
 Not built: pin and unpin commands, a library list, settings read and write, source enable and
-disable. The commands for agreement consent (§6.6) are also not built.
+disable. The consent option of §6.6 is also not built.
 
 | Event | Payload |
 |---|---|
@@ -283,122 +358,171 @@ the error code `cancelled`; the UI must not show that as a failure.
 
 ---
 
-## 6. Data-flow walkthroughs (LLM must implement exactly these)
+## 6. Data-flow walkthroughs
 
-### 6.1 Search
-1. Frontend calls `search_sources(query, filters)`.
-2. Core checks per-source cache; for each stale enabled source, issues async catalog request.
-3. Merge results -> `Vec<PackageSummary>` -> return; persist fetched rows to `packages`.
+### 6.1 Search (WP4, built)
+1. The frontend calls `search_sources(search_id, query)`.
+2. The core checks the cache for each enabled source and asks each stale source. The cache
+   rule is pending ADR 0001: the cache keeps the stale rows of bug F1 for its time limit.
+3. The core merges the results to `Vec<PackageSummary>` and stores the fetched rows in
+   `packages`. The result returns from the call. The same result also arrives as
+   `store:search-results`, or an error as `store:search-failed`, with the same `search_id`. The
+   UI uses the `search_id` to drop a late answer to an old query.
 4. Frontend renders cards; clicking one calls `get_app_detail`.
 
-### 6.2 Install (community app)
+### 6.2 Install (community app) (WP5, built; step 2 has a planned part)
 1. `start_install(package_id)` reads the detail, refuses a paid item, checks the ledger (§6.7),
    starts winget, sets `InstallState::Installing` and opens a `ProgressEvent` stream.
 2. The executor runs a silent, non-interactive winget install with an exact id match and a
-   named source. It passes an agreement flag only for consent that the user gave (§6.6). The
-   flags are in the `winget-executor` skill.
+   named source. *Planned (§6.6):* it passes an agreement flag only directly after the user
+   accepted that agreement. *On the branch:* the flags come from a config value.
 3. winget's stdout/stderr is parsed into staged progress; each parse updates the stream.
 4. The exit code decides the result, and §6.7 gives the ledger state for each result. The
    stream ends with one terminal event.
 5. Frontend shows progress bar + a log tail; `cancel_install` stops the winget process tree
    (§6.7).
 
-### 6.3 Update all
+### 6.3 Update all (WP6, planned; the two commands are built)
 1. `check_updates()` lists the available updates and changes nothing on the system. It runs
    `winget upgrade` with no package argument and no `--all`; that form only prints the list.
    Never use `--all` in a check: `winget upgrade --all` installs every update.
-2. Returns `Vec<UpdateAvailable>`; frontend shows list + "Update all".
-3. `update_all()` runs updates sequentially (configurable concurrency = 1), emitting progress per
-   package; results aggregated into a summary event.
+2. *Planned:* in v1 each read-only winget call names the `winget` source. A read-only call
+   passes no agreement flag unless §6.6 permits it for that one call. *On the branch:*
+   `check_updates` names no source.
+3. Returns `Vec<UpdateAvailable>`; frontend shows list + "Update all".
+4. `update_all()` runs the updates sequentially, emitting progress per package; results
+   aggregated into a summary event. It skips a package that needs a package agreement and
+   records it in the summary.
 
-### 6.4 Purchase hand-off (never in-app)
+### 6.4 Purchase hand-off (WP5, built; never in-app)
 1. A detail row with `is_paid=true` renders a **Buy in Microsoft Store** button instead of
    Install.
 2. Core's `open_store_page(product_id)` calls the OS to open the official product URL in the
    default browser. Nothing else happens in-app.
+3. A community package is never paid. An msstore item is paid, free or unknown; an unknown
+   item gets the hand-off only. WP7 defines how the adapter reads the value (review action
+   A17).
 
-### 6.5 Headless / remote (Phase 3)
-1. `start_server(port)` boots the optional axum server bound to localhost (or LAN with explicit
-   user opt-in + token).
-2. It exposes the same operations as JSON endpoints: search, detail, install, cancel, update,
-   library, log stream (SSE), using the identical core services (no separate logic).
-3. A minimal web UI (same components, no Tauri layer) talks to it for server boxes.
+### 6.5 Headless mode (WP10, planned)
 
-### 6.6 Agreement consent (WP5; not built)
+Blocked. Do not implement. A decision record must first answer `docs/STRATEGY.md` open
+question 6: the hosting model, authentication in each mode, origin checks, consent over HTTP
+(§6.6), and winget on Windows Server.
 
-Hard rule 4 applies. The app never accepts an agreement that the user did not see. There is no
-global setting that accepts agreements.
+### 6.6 Agreement consent (WP5, planned)
 
-Two kinds of agreement exist, and each has its own rule:
+Hard rule 4 applies. The app never accepts an agreement that the user did not see.
 
-| Kind | Consent | Storage |
+#### Rules
+
+- **The app stores no consent.** No setting, no database column and no file holds an
+  acceptance. winget can keep an acceptance itself; the app does not depend on that.
+- **An agreement flag goes to winget for one operation only, and only directly after the user
+  accepted that agreement in the consent dialog.**
+- When winget asks again, on a new machine or after a change of terms, the app shows the
+  dialog again.
+- No transport other than the desktop IPC may carry a consent until the WP10 decision record
+  defines it.
+
+| Kind | When the user sees it | Storage in the app |
 |---|---|---|
-| Source agreement | Once per source. | `sources` table: the time of consent for that source. |
-| Package agreement | Once per operation. The user sees it each time. | None. The consent lives for one operation only. |
+| Source agreement | Each time winget reports that it is necessary. | None. |
+| Package agreement | Each time winget reports that it is necessary. | None. |
 
-Flow:
+#### Spike (the first WP5 task)
 
-1. An operation starts with no package agreement flag. It passes the source agreement flag
-   only when the `sources` table holds consent for that source.
+Three facts about winget are not verified. Answer them on a real machine before other work on
+this section, and record the answers in the `winget-executor` skill:
+
+1. Where does the agreement text come from when winget runs with no interactive prompt? The
+   output of `winget show` is the first candidate.
+2. Does winget keep a source acceptance after one accepted call?
+3. Does winget ask again when the terms of a source change?
+
+The rules above are correct for each answer. The answers decide only how frequently the
+dialog opens and what it can show.
+
+Fallback when winget gives no text: the dialog names the package, the source and the kind of
+agreement, and shows the agreement or license link from the package data. The link opens in
+the browser. **This fallback needs maintainer approval:** the maintainer decides if a link
+satisfies hard rule 4. Until that approval, a case with no text stops the operation with a
+clear message.
+
+#### Flow
+
+1. An operation starts with no agreement flag.
 2. When winget needs an agreement, the operation ends with the error `agreements_required`.
-   The two fields of the error say which kind is missing. The ledger goes back to its stable
-   state (§6.7, "failed" rows). This result is not a failure in the UI.
-3. The UI opens a consent dialog. The dialog names the package and the source, says which
-   kind of agreement is necessary, and shows the agreement text that winget gives.
-4. **Accept.** For a source agreement the UI calls `accept_source_agreement(source)`, which
-   stores the consent. For a package agreement the UI sets
-   `options.accept_package_agreements = true`. Then the UI calls the start command again.
-   When the two kinds are necessary, winget reports them one at a time, and the dialog can
-   open two times.
-5. **Decline.** Nothing runs. The ledger does not change. The core writes one Info row to
-   `operation_log`: "agreements declined".
-6. The user can remove a source consent in the source settings (WP6 or later; until then the
-   consent stays).
+   One field of the error says which kind is missing. The ledger goes back to the state it
+   had before the operation started (§6.7, the "winget needs an agreement" row).
+3. The UI opens the consent dialog and shows no error. The dialog names the package, its
+   version and the source, says which kind of agreement is necessary, and shows the agreement
+   text.
+4. **Accept.** The UI calls the start command again with `options.consent`: the kinds that the
+   user accepted in the dialogs of this operation, and the package version that the dialog
+   showed. The core passes the flag of each accepted kind for this one operation and installs
+   exactly that version. If that version is not available, the operation ends with
+   `agreements_required` again.
+5. When winget then needs the second kind, steps 2 to 4 repeat. The dialog opens two times at
+   most for one operation.
+6. **Decline.** Nothing more runs. The core writes one Info row to `operation_log`:
+   "agreements declined".
 
-Changes that WP5 owns:
+A read-only command (`check_updates`, a library list) that ends with `agreements_required`
+returns that error. The UI shows the dialog for the source agreement. After "Accept", the UI
+calls the command again with the source consent, and the core passes the source flag for that
+one call.
 
-- Remove `accept_source_agreements` from `AppConfig`. Today it sets the two flags for each
-  operation, which is the silent acceptance that rule 4 forbids. It defaults to false, and no
-  screen sets it, so no user loses a setting.
-- Add the consent column to `sources` with an additive migration.
-- Add the `accept_source_agreement` command and the `accept_package_agreements` option on
-  `start_install`. `update_all` (WP6) stops at a package that needs an agreement, reports it in
-  the summary, and continues with the next package.
-- Add the consent dialog. The UI must read `error.code`; today it reads only `cancelled`.
+#### Changes that WP5 owns
+
+- Remove `accept_source_agreements` from `AppConfig`, the config type in `config.rs`. On the
+  branch on 2026-11-11 it sets the source and package agreement flags for each operation,
+  which is the silent acceptance that rule 4 forbids. It defaults to false, and no screen sets
+  it, so no user loses a setting.
+- Add `options.consent` to `start_install`, and the same option to `start_uninstall` and
+  `check_updates` for the source kind.
+- Add the "winget needs an agreement" row of §6.7 to the code. On the branch this case is
+  recorded as a failure.
+- Add the consent dialog. The UI must read `error.code`; on the branch it reads only
+  `cancelled`.
+- Update the `winget-executor` skill (hard rules, command lines, test list) to this section,
+  in the same pull request.
 - Tests: the fake winget returns each of the two agreement exit codes; an accepted retry
-  passes the correct flag; a decline leaves the ledger as it was.
+  passes only the accepted flag and the shown version; a decline and a first
+  `agreements_required` leave the ledger as it was; no operation passes a flag with no
+  consent.
 
-Open point for the implementer: find how to read the agreement text with no interactive
-prompt, and record the method in the `winget-executor` skill. If winget gives no text for a
-case, stop and report. Do not show a dialog that has no text.
+### 6.7 Install state transitions (WP5, built)
 
-### 6.7 Install state transitions (WP5, as built)
+#### Terms
 
-Terms. The *ledger* is the `installs` row. An operation is *active* while its winget process
-runs in this app process. The *stable state* is the state the ledger had before the operation
-started: `Installed` when a version is recorded, `NotInstalled` or `Failed` when not.
+- The *ledger* is the `installs` row.
+- An operation is *active* while its winget process runs in this app process.
+- The *rest state* of a package is `Installed` when a version is recorded (`Pinned` when the
+  pin flag is set), and `NotInstalled` when no version is recorded.
+- `Installing` and `Uninstalling` are the only busy states; an update uses `Installing`.
 
-`Installing` and `Uninstalling` are the only busy states; an update uses `Installing`. The legal
-edges are in `domain/install.rs`. An illegal edge returns the error `unsupported` and changes
-nothing.
+The legal edges are in `domain/install.rs`. An illegal edge returns the error `unsupported` and
+changes nothing.
 
-**Start**
+#### Start
+
+The rows apply from top to bottom; the first match wins.
 
 | Ledger state | Command | Result |
 |---|---|---|
-| No row, `NotInstalled`, `Installed`, `UpdateAvailable`, `Failed` | `start_install` | `Installing`; `target_version` set. |
-| `Installing` with no active operation (a leftover) | `start_install` | `Installing`. |
-| `Uninstalling`, `Pinned` | `start_install` | No change; `unsupported`. |
 | Any, paid item | `start_install` | No change; `unsupported`. |
-| `Installed`, `UpdateAvailable`, `Failed`, `Pinned` | `start_uninstall` | `Uninstalling`. |
-| No row, `NotInstalled`, `Installing`, `Uninstalling` | `start_uninstall` | No change; `unsupported`. |
 | Any, an operation is active for the package | Either | No change; `unsupported`. The message names the running operation. |
+| `Uninstalling`, `Pinned` | `start_install` | No change; `unsupported`. |
+| `Installing` with no active operation (a leftover) | `start_install` | `Installing`. |
+| No row, `NotInstalled`, `Installed`, `UpdateAvailable`, `Failed` | `start_install` | `Installing`; `target_version` set. |
+| No row, `NotInstalled`, `Installing`, `Uninstalling` | `start_uninstall` | No change; `unsupported`. |
+| `Installed`, `UpdateAvailable`, `Failed`, `Pinned` | `start_uninstall` | `Uninstalling`. |
 | Any, winget is absent | Either | No change; `winget_not_found`. |
 
 A second click during an operation and an uninstall during an install are the "operation is
 active" row. The UI also disables the buttons while an operation runs.
 
-**End of an operation**
+#### End of an operation
 
 `target_version` is cleared in each row. The executor writes the `operation_log` row.
 
@@ -412,43 +536,57 @@ active" row. The UI also disables the buttons while an operation runs.
 | Uninstall | Success | `done` | `NotInstalled`; version and pin cleared | Info | none |
 | Uninstall | Failure | `failed` | `Failed`; version kept | Error | from the exit code |
 | Uninstall | Cancel | `cancelled` | `Installed` | Info | `cancelled` |
+| Any | winget needs an agreement (*planned, §6.6*) | `failed` | The state before the operation started | Info | `agreements_required` |
 
-A row that has the pin flag goes back to `Pinned` where the table says `Installed`. The exit
-code map is in the `winget-executor` skill.
+- A row that has the pin flag goes back to `Pinned` where the table says `Installed`.
+- The exit code map is in the `winget-executor` skill.
+- On the branch, "winget needs an agreement" follows the failure rows: `Failed` and an Error
+  row for a first install. WP5 changes it to the row above.
+- `Failed` after a failed uninstall keeps the version. The app is probably still installed,
+  and the ledger cannot say so. A failed install with a version keeps `Installed`, because the
+  earlier version is still there. The gap table has the fix for the uninstall case.
 
-**Cancel**
+#### Cancel
 
 - Cancel does the same thing in each stage: it stops the winget process tree. The app uses a
   Job Object first and `taskkill /T /F` second. winget has no cancel call.
 - When the process ended before the cancel arrived, the real outcome stands. An exit code of 0
   after a cancel is a success.
 - Cleanup after a cancel means: the process tree is stopped, `target_version` is cleared, and
-  the ledger is in its stable state. The row stays. The app does not delete downloaded files
+  the ledger is in the rest state. The row stays. The app does not delete downloaded files
   and does not undo an installer that already started to write; winget and the installer own
   those files.
 - When the app cannot stop the tree (an elevated installer), the operation continues and its
   real outcome settles the ledger. The executor writes a Warn log row. A second cancel for
   the same operation does nothing.
 
-**Restart**
+#### Restart
 
-On the first use of the core after a start, each row in `Installing` becomes `Installed` when a
-version is recorded and `Failed` when not. Each row in `Uninstalling` becomes `Failed`. The core
-writes one Warn log row per row. It does not look for a winget process that survived the last
-run.
+On the first use of the core after the app starts, each ledger row in `Installing` becomes
+`Installed` when a version is recorded and `Failed` when not. Each ledger row in `Uninstalling`
+becomes `Failed`. The core writes one Warn entry to `operation_log` for each changed ledger
+row. It does not look for a winget process that survived the last run.
 
-**Known gaps**
+#### Known gaps
 
-| Gap | Owner |
-|---|---|
-| A cancel that cannot stop the tree is not reported to the UI. The Cancel button stays and does nothing. Emit a `store:progress` event with a message, and disable the button. | WP5 |
-| Agreement consent (§6.6). | WP5 |
-| Cancel that depends on the stage, and cancel of an elevated installer (review A12). | WP11 |
-| The exit code is not stored in `operation_log`; the "nothing to do" exit code counts as success for each operation, uninstall also (review A13). | WP6 |
-| Nothing writes `Pinned` or `UpdateAvailable`; no pin command exists (review A10). | WP6 |
-| No check of the ledger against the installed list after a restart or a failed uninstall (review A10). | WP6 |
-| A service-layer failure to settle the ledger goes to the trace log only. | WP6 |
-| The UI never sets the install scope, so winget uses its default (review A24). | WP11 |
+The review ids are from `docs/reviews/2026-11-11-spec-review.md`.
+
+| Review id | Gap | Planned fix | Owner |
+|---|---|---|---|
+| none | A cancel that cannot stop the tree is not reported to the UI. The Cancel button stays and does nothing. | Emit a `store:progress` event with a message, and disable the button. | WP5 |
+| A2 | No agreement consent. | §6.6. | WP5 |
+| none | `check_updates` names no source, so it queries each configured source. | Name the `winget` source (§6.3). | WP5 |
+| A24 | "An operation is active" returns `unsupported`, and the UI cannot separate it from other refusals. | Add the code `busy`, retryable. | WP5 |
+| none | The recorded version is the catalog target, not the version that winget installed. | After a success, read the version from the installed list. Keep the target as the fallback and write a Warn row on a difference. | The F1 fix |
+| A10 | After a failed uninstall and after a restart, the ledger guesses. | Check the installed list and set `Installed` or `NotInstalled` from it. Keep `Failed` for "install tried, no version". | WP6 |
+| A10 | Nothing writes `Pinned` or `UpdateAvailable`; no pin command exists. | Pin becomes a flag; update-available comes from the scan. | WP6 |
+| A11 | Two installs of different packages can run together. | One queue for each operation that changes the system. Installer exit 1618 maps to a retryable busy error. | WP6 |
+| none | A second app instance has a separate lock on the same ledger. | One app instance only. | WP6 |
+| A13 | The exit code is not stored in `operation_log`. The "nothing to do" exit code counts as success for install, update and uninstall. | An `exit_code` column; a rule per operation. | WP6 |
+| A24 | A paid item, an illegal transition, a timeout, a rate limit and a busy installer have no code of their own. | New codes. | WP6 |
+| none | A service-layer failure to settle the ledger goes to the trace log only. | Write an Error row to `operation_log`. | WP6 |
+| A12 | Cancel does not depend on the stage; an elevated installer cannot be cancelled. | Stage-dependent cancel. | WP11 |
+| A24 | The UI never sets the install scope, so winget uses its default. | A scope choice and the elevation path. | WP11 |
 
 ---
 
@@ -495,7 +633,7 @@ with live progress.
 rating), cancel, uninstall, log tail, agreement consent (§6.6). Commands: `start_uninstall`,
 `get_install_status`, `get_operation_log` (§5.4). State rules: §6.7.
 *Accept:* each row of the two transition tables in §6.7 has a test that passes against the fake
-winget; the consent tests of §6.6 pass; a cancelled install leaves the ledger in its stable
+winget; the consent tests of §6.6 pass; a cancelled install leaves the ledger in its rest
 state with `target_version` cleared. **This is the MVP milestone.**
 
 **WP6 — Library + updates.** Installed list, update badge, update one/all with summary.
