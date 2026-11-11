@@ -18,6 +18,7 @@ use crate::domain::SourceKind;
 use crate::error::AppResult;
 use crate::executor::winget_cli::{WingetCli, WingetOptions};
 use crate::executor::PackageExecutor;
+use crate::services::install::{recover_interrupted, ActiveOperations};
 use crate::sources::winget_repo::WingetRepoSource;
 
 pub type SharedExecutor = Arc<dyn PackageExecutor>;
@@ -30,6 +31,8 @@ pub struct Core {
     pub pool: DbPool,
     pub catalog: Catalog,
     pub config: AppConfig,
+    /// Operations running in this process (install service).
+    pub active: ActiveOperations,
     executor: Mutex<Option<SharedExecutor>>,
     factory: ExecutorFactory,
 }
@@ -45,6 +48,7 @@ impl Core {
             pool,
             catalog,
             config,
+            active: ActiveOperations::default(),
             executor: Mutex::new(None),
             factory,
         }
@@ -116,6 +120,15 @@ async fn build_core(db_path: Option<&std::path::Path>) -> AppResult<Core> {
     let pool = db::init_pool(path).await?;
     db::run_migrations(&pool).await?;
     sources::seed_defaults(&pool).await?;
+    // Busy ledger rows from an earlier run are stale; settle them. Never fatal.
+    match recover_interrupted(&pool).await {
+        Ok(0) => {}
+        Ok(n) => tracing::warn!(
+            rows = n,
+            "settled interrupted operations from a previous run"
+        ),
+        Err(e) => tracing::warn!("could not settle interrupted operations: {e}"),
+    }
     tracing::info!(path = %path.display(), "database ready");
 
     let catalog = Catalog::new(

@@ -31,7 +31,8 @@ impl InstallState {
                     UpdateAvailable,
                     Installing | Uninstalling | Pinned | Installed
                 )
-                | (Uninstalling, NotInstalled | Failed)
+                // A cancelled uninstall leaves the app in place.
+                | (Uninstalling, NotInstalled | Failed | Installed)
                 | (Failed, Installing | Uninstalling | NotInstalled)
                 | (Pinned, Installed | Uninstalling | UpdateAvailable)
         )
@@ -110,7 +111,7 @@ mod tests {
             Installing => &[Installed, Failed, NotInstalled],
             Installed => &[Installing, Uninstalling, UpdateAvailable, Pinned],
             UpdateAvailable => &[Installing, Uninstalling, Pinned, Installed],
-            Uninstalling => &[NotInstalled, Failed],
+            Uninstalling => &[NotInstalled, Failed, Installed],
             Failed => &[Installing, Uninstalling, NotInstalled],
             Pinned => &[Installed, Uninstalling, UpdateAvailable],
         }

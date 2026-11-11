@@ -43,9 +43,9 @@ and should be explicitly descoped.
 - App detail page (description, version, publisher, size, screenshots)
 - Install / uninstall / cancel
 - Live progress + logging
-- Update available / update all
 
 **Should (v2)**
+- Update available / update all
 - Library of installed apps
 - Category browsing & "featured" carousel
 - Multiple sources: winget community repo + msstore + Scoop + Chocolatey
@@ -64,8 +64,13 @@ and should be explicitly descoped.
 
 ### 1.3 Use cases & personas
 
+> **Phase decision (maintainer, 2026-11-11):** the work-package order in `docs/SPEC.md` §7 is
+> the schedule. The interactive desktop comes first and is the MVP. Update check and
+> update-all follow the MVP (SPEC WP6). Headless mode stays in Phase 3 (SPEC WP10) and needs
+> a decision record first. This closes review action A7.
+
 1. **Interactive desktop** — a nicer, faster Store: browse, install, update, remove free apps; no ads, no account walls.
-2. **Home servers / headless boxes (primary)** — Windows Server (and debloated PCs) where the real Store app is absent or unwanted, but apps still need to be installed and kept updated via winget/MSIX. Needs: no Store dependency, works via winget manifests, and (ideally) **remote management** from another machine.
+2. **Home servers / headless boxes (long-term target, Phase 3)** — Windows Server (and debloated PCs) where the real Store app is absent or unwanted, but apps still need to be installed and kept updated via winget/MSIX. Needs: no Store dependency, works via winget manifests, and (ideally) **remote management** from another machine.
 3. **Admin / reproducible setups** — install/update a fixed set of apps from an import file, with clear logs.
 
 ---

@@ -117,3 +117,40 @@ export interface InstallOptions {
   version?: string
   scope?: 'user' | 'machine'
 }
+
+export type InstallState =
+  | 'not_installed'
+  | 'installing'
+  | 'installed'
+  | 'update_available'
+  | 'uninstalling'
+  | 'failed'
+  | 'pinned'
+
+export interface ActiveOperation {
+  operation_id: string
+  operation: OperationKind
+}
+
+/** Ledger state for one package plus the operation running for it, if any. */
+export interface InstallStatus {
+  package_id: PackageId
+  state: InstallState
+  installed_version: string | null
+  target_version: string | null
+  pinned: boolean
+  last_updated: number | null
+  active: ActiveOperation | null
+}
+
+export type LogLevel = 'debug' | 'info' | 'warn' | 'error'
+
+export interface OperationLogEntry {
+  id: number | null
+  ts: number
+  level: LogLevel
+  operation: OperationKind | null
+  package_id: PackageId | null
+  message: string
+  detail: string | null
+}
