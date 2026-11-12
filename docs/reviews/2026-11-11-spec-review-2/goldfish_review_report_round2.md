@@ -1,6 +1,6 @@
 # Resolution of Stage 7 round 2 findings
 
-- **Status:** proposed, waits for maintainer approval
+- **Status:** resolved on 2026-11-12. The maintainer approved all proposals, with option (a) for R9.
 - **Source:** `critic_report_round2.md` (R1 to R20), `docs/SPEC.md` at commit `e51297c`
 - **Date:** 2026-11-12
 - **Counts:** 18 PROPOSE FIX, 1 ESCALATE (R9), 1 split (R20: part fix, part decline)

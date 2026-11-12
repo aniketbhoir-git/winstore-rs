@@ -140,6 +140,14 @@ own decision record.
   exact by construction.
 - `PackageSummary` rating and icon fields stay empty for this source.
 
+## Condition from the SPEC review (2026-11-12)
+
+If option A is accepted, search, `get_app_detail` and the detail read in `start_install`
+become read-only winget calls. `docs/SPEC.md` §6.6 then applies to them: a call that ends
+with `agreements_required` opens the consent dialog, and the work adds the `consent` option
+to `search_sources` and `get_app_detail`. `start_install` must use the cached detail when one
+exists (SPEC §6.2, §2.3).
+
 ## Not verified
 
 Header text on non-English Windows; truncation on winget older than 1.29; the cause of the slow
