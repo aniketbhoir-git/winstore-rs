@@ -1,6 +1,7 @@
 # Resolution of Stage 9 round 2 findings
 
-- **Status:** proposed on 2026-11-12. Waits for maintainer approval.
+- **Status:** resolved on 2026-11-12. The maintainer approved all 13 proposals and the five
+  choices as proposed.
 - **Source:** `implementation_readiness_report_round2.md` (Q1 to Q13), `docs/SPEC.md` at
   commit `a0682b8`
 - **Counts:** 13 PROPOSE FIX. Five of them hold a design choice (Q1, Q3, Q4, Q5, Q7); the
