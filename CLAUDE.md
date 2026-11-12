@@ -36,10 +36,14 @@ elevation). `tier:any` issues are reserved for community contributors on cheaper
   (winget.run, PR #14), #4 winget executor + progress parser (PR #15), #5 Tauri IPC layer + UI
   skeleton (PR #18).
 - Built, not merged: #6 (detail page, install/uninstall/cancel, log tail) on
-  `impl/6--install-loop`, PR #19. Do not merge it before review actions A2 and A4 are closed.
-- `docs/SPEC.md` was reviewed on 2026-11-11: 6 blockers. Read
-  `docs/reviews/2026-11-11-spec-review.md` before any work. Where SPEC.md and the code
-  disagree, stop and report; do not rebuild code that exists.
+  `impl/6--install-loop`, PR #19. Do not merge it before the WP5 work that remains is done:
+  SPEC §6.6 (spike, then consent flow) and the WP5 rows of the §6.7 gap table. SPEC §7, WP5,
+  gives the order.
+- `docs/SPEC.md` was repaired and reviewed with EGM on 2026-11-11 and 2026-11-12. The reports
+  are in `docs/reviews/2026-11-11-spec-review-2/`. A section marked *built* or *built on
+  branch* follows the code; a *planned* section overrides it. Where a built section and the
+  code disagree, stop and report; do not rebuild code that exists. The open review actions
+  (A5 to A25) are in `docs/reviews/2026-11-11-spec-review.md`.
 - Known bug: search returns unrelated results (the winget.run service does). See F1 in
   `docs/ISSUE-BACKLOG.md`; it raises #16 to an MVP blocker.
 - Requirement: all testing must run unattended, for contributors also. See F2.

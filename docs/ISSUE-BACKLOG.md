@@ -215,9 +215,11 @@ Design work on them uses the Elephant-Goldfish Model; see `CLAUDE.md`, "Design w
 ### F3 — Review blockers on the spec
 Fix these in `docs/SPEC.md` before more work packages start. Details are in the review file.
 - **A1:** ✅ spec text fixed on 2026-11-11 (§6.3, §5.2). The code was safe.
-- **A2:** ✅ consent model defined in SPEC §6.6 on 2026-11-11. The code is not built: the consent
-  dialog, the `accept_source_agreement` command, the per-operation option, and the removal of
-  the global config flag. This work blocks the close of #6.
+- **A2:** ✅ consent model defined in SPEC §6.6, revised on 2026-11-12 after the EGM review
+  (`docs/reviews/2026-11-11-spec-review-2/`). The app stores no consent; a flag goes to winget
+  for one operation after a user "Accept". The code is not built: the spike, the `consent`
+  option, the consent dialog, and the removal of the global config flag. SPEC §7, WP5, gives
+  the order. This work blocks the merge of PR #19 and the close of #6.
 - **A3:** ✅ spec text fixed on 2026-11-11: document status note, §3 differences, §5.4 command
   table, §7 status table, WP3 cancel text.
 - **A4:** ✅ transition tables in SPEC §6.7 on 2026-11-11, as built. One WP5 gap blocks the close

@@ -1,6 +1,6 @@
 # Resolution of Stage 9 findings
 
-- **Status:** proposed, waits for maintainer approval
+- **Status:** resolved on 2026-11-12. The maintainer approved all 16 proposals and the three choices as recommended.
 - **Source:** `implementation_readiness_report.md` (P1 to P16), `docs/SPEC.md` at commit
   `ce32d68`
 - **Date:** 2026-11-12

@@ -149,7 +149,9 @@ WP10 adds a mode for headless Windows Server machines; its design is not decided
 - Every error maps to: (stable string `code`, human message, optional raw detail for logs,
   is_retryable flag). IPC returns this as JSON; logs record the raw detail.
 - In one `AgreementsRequired` error, exactly one of the two fields is true. winget reports one
-  kind of agreement at a time.
+  kind of agreement at a time. On the branch the JSON does not carry the two fields, so the UI
+  cannot see which kind is missing. *Planned (WP5):* the JSON of `agreements_required` also
+  carries `source_agreements` and `package_agreements`.
 
 ### 1.4 Goals and non-goals
 
@@ -327,8 +329,15 @@ The values of `Operation` and `OperationStage` are shown as their wire strings.
 - `OperationStarted`: operation id.
 - Install options (the `options` argument of §5.4): version (optional), scope (optional;
   `user` or `machine`; the UI does not set it before WP11), and *planned (§6.6)* consent.
-- Consent (*planned, §6.6*): the accepted agreement kinds (source, package, or the two) and
-  the package version that the dialog showed.
+- Consent (*planned, §6.6*), as JSON: `{ "kinds": [...], "version": ... }`.
+  - `kinds`: a list with `"source"`, `"package"`, or the two. An empty list is the same as no
+    consent.
+  - `version`: the package version that the dialog showed, or `null`.
+  - `start_install` needs a version when `kinds` has `"package"`; with no version it returns
+    `invalid_config`.
+  - `start_uninstall` accepts the kind `"source"` only and ignores the version. The kind
+    `"package"` there returns `invalid_config`. The spike checks which agreement flags
+    `winget uninstall` accepts.
 - `InstallStatus`: package id, state, installed version, target version, pinned, last updated,
   and the active operation (operation id and kind) when one runs.
 - `OperationLogEntry`: id, time, level, operation kind, package id, message, detail.
@@ -515,28 +524,41 @@ the webview:
 | Store the consent for each winget source. | Rejected | A stored consent accepts changed terms with no user action (round 1 finding K1 in `docs/reviews/2026-11-11-spec-review-2/`). |
 | A config value that sets the flags for each operation. | Rejected | That is silent acceptance. Hard rule 4 forbids it. |
 | Read agreements through the winget COM API. | Open | It depends on the executor decision of §2.2. |
-| The core opens a native consent dialog, so that the webview carries no consent. | Open | It removes the trust in the webview. The spike must show if a native dialog can show a long agreement text. |
+| The core opens a native consent dialog, so that the webview carries no consent. | Open, not in WP5 | It removes the trust in the webview. Nobody checked if a native dialog can show a long agreement text. WP5 builds the webview dialog with the trust-boundary rules; this option is a later hardening step. |
 | Ask winget, before the operation starts, if an agreement is necessary, and show the dialog first. | Open | It removes the failed first operation. No documented winget call gives that answer; spike question 1 shows if `winget show` can. Until then the flow starts the operation and reads the exit code. |
 
 #### Spike (the first WP5 task)
 
-Two questions gate the work on this section. Answer them on a real machine first, and record
-the answers in the `winget-executor` skill:
+Three questions gate the work on this section. Answer them first, and record the answers in
+the `winget-executor` skill:
 
 1. Where does the agreement text come from when winget runs with no interactive prompt? The
-   output of `winget show` is the first candidate.
-2. Can a native dialog that the core opens show a long agreement text? See "Alternatives".
+   output of `winget show` is the first candidate. `ProgressParser::agreements_shown()` in
+   `executor/winget_parse.rs` detects license text in winget output and has no caller; start
+   there.
+2. Which exit code does winget give for an install with a `--version` that does not exist?
+3. Which agreement flags does `winget uninstall` accept?
+
+The spike runs read-only winget commands (`winget show`, `winget search`,
+`winget source list`) on a developer machine. A command that can install or remove software
+runs in CI or a sandbox only (§8).
 
 Two more facts are useful for the skill and do not gate the work, because the rules above are
 correct for each answer: does winget keep a source acceptance after one accepted call, and
 does winget ask again when the terms of a winget source change? The answers decide only how
 frequently the dialog opens.
 
-Fallback when winget gives no text: the dialog names the package, the winget source and the kind of
-agreement, and shows the agreement or license link from the package data. The link opens in
-the browser. **This fallback needs maintainer approval:** the maintainer decides if a link
-satisfies hard rule 4. Until that approval, a case with no text stops the operation with a
-clear message.
+The answer to question 1 selects the work:
+
+| Result | Dialog | Tests that apply |
+|---|---|---|
+| (a) winget gives the agreement text. | The webview dialog shows the text. | All consent tests. |
+| (b) winget gives no text, and the maintainer approved the link fallback. | The webview dialog names the package, the winget source and the kind of agreement, and shows the agreement or license link from the package data. The link opens in the browser. | All consent tests. |
+| (c) winget gives no text, and the fallback has no approval. | No dialog. The operation stops with the message "agreement text is not available". The app never passes a flag. | All consent tests except the tests for "Accept". |
+
+**The fallback of case (b) needs maintainer approval:** the maintainer decides if a link
+satisfies hard rule 4. WP5 can close in case (c). A package that needs an agreement then
+cannot install through the app until that decision.
 
 #### Flow
 
@@ -552,14 +574,21 @@ clear message.
    call starts a new operation in the same attempt. The core passes the flag of each accepted
    kind for this one operation and installs exactly that version. The version rule is
    necessary: an agreement belongs to one package version, so a newer version can have terms
-   that the user did not see. If that version is not
-   available, the operation ends with `package_not_found`, and the message names the version.
-   The attempt ends there; the user starts a new attempt with no consent.
+   that the user did not see. If that version is not available, the operation ends with the
+   error that the exit code map gives; `package_not_found` is expected and not verified (spike
+   question 2). The message names the version. The attempt ends there; the user starts a new
+   attempt with no consent.
 5. When winget then needs the second kind, steps 2 to 4 repeat, and the retry carries the two
    kinds. The dialog opens two times at most for one attempt, so an attempt has three
    operations at most.
-6. **Decline.** Nothing more runs, and the attempt ends. `services/install.rs` writes one
-   Info row to `operation_log`: "agreements declined".
+6. **Decline.** The UI closes the dialog. Nothing more runs, and the attempt ends. The core
+   gets no call and writes no log row; the `agreements_required` row of step 2 is the record.
+
+On the branch, the UI marks an operation as failed when the terminal `store:progress` event
+arrives, before `store:operation-finished`. *Planned (WP5):* the UI waits for
+`store:operation-finished` and reads `error.code` before it shows a failure, so that
+`agreements_required` opens the dialog and shows no error. The two handlers are in
+`ui/src/lib/operations.svelte.ts`.
 
 #### Read-only calls
 
@@ -579,19 +608,52 @@ call only.
   branch on 2026-11-11 it sets the source and package agreement flags for each operation,
   which is the silent acceptance that rule 4 forbids. It defaults to false, and no screen sets
   it, so no user loses a setting.
-- Add `options.consent` to `start_install` and `start_uninstall` (§5.4).
+- Add `options.consent` to `start_install` and `start_uninstall` (§5.4, §4.2).
 - Add the "winget needs an agreement" row of §6.7 to the code. On the branch this case is
   recorded as a failure.
 - Set the content security policy and add the text-only test of "Trust boundary".
 - Add the consent dialog. The UI must read `error.code`; on the branch it reads only
   `cancelled`.
-- Update the `winget-executor` skill (hard rules, command lines, test list) to this section,
-  in the same pull request.
-- Tests: the fake winget returns each of the two agreement exit codes; an accepted retry
-  passes only the accepted flags and the shown version; a decline and a first
-  `agreements_required` leave the ledger in the rest state; a shown version that is gone
-  gives `package_not_found`; no operation passes a flag with no consent; catalog text with
-  markup appears as text.
+- Update the `winget-executor` skill (hard rules, command lines, test list, state notes) to
+  this section, in the same pull request. On 2026-11-12 its lines 19, 61 and 153 state the
+  config rule, and its lines 135-136 and 146 state the old cancel rule.
+
+Files that the change touches. Paths are relative to `src-tauri/src/` unless they start with
+`ui/`, `src-tauri/` or `.claude/`:
+
+| File | Change |
+|---|---|
+| `config.rs` | Remove the field and its two tests. |
+| `ipc/state.rs` | Stop the copy of the config value into the executor options. |
+| `executor/mod.rs` | `InstallRequest` carries the consent. `PackageExecutor::remove` gets a request, so that a consent can reach it. |
+| `executor/winget_cli.rs` | Remove `WingetOptions.accept_agreements`. Six argument builders read it today. After the change the install, update and remove builders take the flags from the request, and the three read-only builders (`list_installed_args`, `list_updates_args`, `pin_args`) pass no flag. `finish()` writes an Info row, not an Error row, for `agreements_required`. |
+| `services/install.rs` | `settle()` gets a case for `AgreementsRequired` before the general failure case, and the planned cancel rule for an uninstall. Update the table in the module comment. |
+| `error.rs` | Serialize the two agreement fields (§1.3). |
+| `ipc/commands.rs`, `ipc/test_support.rs` | The `consent` option on the two commands. `FakeExec` implements the changed trait. |
+| `src-tauri/tauri.conf.json` | The content security policy. |
+| `ui/src/lib/api.ts`, `types.ts`, `operations.svelte.ts` | The option, the two error fields, the handler order. |
+| `ui/src/components/ConsentDialog.svelte` | New. |
+| `src-tauri/tests/fixtures/fake_winget.rs` | Only if a new case needs it. The fake returns the two agreement exit codes today. |
+
+Tests that assert the config rule today and need a rewrite to consent-driven assertions:
+`config.rs` (2), `executor/winget_cli.rs` (2), `tests/executor_winget.rs` (3, with the helper
+`Fx::accepting`), `tests/install_loop.rs` (1), `tests/winget_smoke.rs` (1).
+
+Tests to add. The tests for the two agreement exit codes exist in
+`tests/executor_winget.rs` and in `executor/winget_parse.rs`; reuse them and add tests at the
+ledger and service level:
+
+- An accepted retry passes only the accepted flags and the shown version. This test runs
+  against the subprocess fake (`tests/install_loop.rs`, `tests/executor_winget.rs`), because
+  `FakeExec` ignores its request.
+- A first `agreements_required` leaves the ledger in the rest state and writes an Info row.
+- A shown version that is gone ends the attempt with the error of spike question 2.
+- No operation passes a flag with no consent. A read-only call never passes a flag.
+- `start_uninstall` with the kind `"package"` returns `invalid_config`.
+- `tauri.conf.json` holds `script-src 'self'`.
+- UI tests (see the WP5 entry in §7 for when they can exist): catalog text with markup
+  appears as text; `agreements_required` opens the dialog and shows no error; "Decline" makes
+  no call.
 
 ### 6.7 Install state transitions (WP5, built on branch)
 
@@ -676,7 +738,7 @@ The review ids are from `docs/reviews/2026-11-11-spec-review.md`.
 
 | Review id | Gap | Planned fix | Owner |
 |---|---|---|---|
-| none | A cancel that cannot stop the tree is not reported to the UI. The Cancel button stays and does nothing. | Emit a `store:progress` event with a message, and disable the button. | WP5 |
+| none | A cancel that cannot stop the tree is not reported to the UI. The Cancel button stays and does nothing. | The condition: the tree is still alive after the Job Object stop and after `taskkill` (the site of the Warn row in `executor/winget_cli.rs`). The executor then emits one `store:progress` event with the stage unchanged and the message "cancel failed: the installer continues". The send must not be dropped when the channel is full; the progress call of today can drop an event. The UI disables Cancel for that operation. Test: a stop function that fails. | WP5 |
 | A2 | No agreement consent. | §6.6. | WP5 |
 | none | `check_updates` names no winget source, so it queries each winget source that is configured. | Name the `winget` winget source (§6.3). | WP6 |
 | none | A cancelled uninstall records `Installed` when no version is recorded. | The cancel goes to the rest state. | WP5 |
@@ -694,7 +756,10 @@ The review ids are from `docs/reviews/2026-11-11-spec-review.md`.
 
 ---
 
-## 7. Work packages (generate in this order)
+## 7. Work packages (in this order)
+
+WP6 does not wait for the F1 fix. The gap row "recorded version" of §6.7 belongs to the F1
+fix, in whatever order the two land.
 
 Status on 2026-11-12. The issue numbers are the GitHub issues and the entries of
 `docs/ISSUE-BACKLOG.md`.
@@ -731,11 +796,12 @@ executable (the cargo example `fake_winget`) for tests.
 *Accept:* tests drive install/update/remove against the fake and parse every stage. The test
 with a real winget install follows §8: CI or a sandbox only.
 
-**WP4 — IPC + UI skeleton.** Define the Tauri commands and events that §5.4 listed at that
-time; create frontend with search page (debounced input -> results grid) and install button
-wiring.
-*Accept:* search from UI shows real community results; clicking Install starts a real install
-with live progress.
+**WP4 — IPC + UI skeleton.** Define the Tauri commands `app_version`, `search_sources`,
+`get_app_detail`, `start_install`, `cancel_install`, `check_updates`, `update_all`,
+`open_store_page` and `start_server`, and the events of §5.4; create frontend with search page
+(debounced input -> results grid) and install button wiring.
+*Accept:* a search from the UI shows results from the community catalog source; a click on
+Install starts an install with live progress. Automated tests use the fake winget (§8).
 
 **WP5 — Detail + full install loop.** Built on the branch: the detail page (description and
 versions; screenshots and rating show only when the catalog source gives them, and the
@@ -743,34 +809,56 @@ community source gives none), cancel, uninstall, log tail, and the commands `sta
 `get_install_status`, `get_operation_log` (§5.4). State rules: §6.7. Work that remains, in
 this order:
 
-1. The spike of §6.6.
-2. The consent flow of §6.6 and its list "Changes that WP5 owns".
-3. The WP5 rows of the gap table in §6.7: the cancel that cannot stop the tree, and the
-   cancelled uninstall.
+1. The spike of §6.6. Its result selects case (a), (b) or (c) of the table there.
+2. The core work: the parts of "Changes that WP5 owns" in §6.6 that are outside `ui/`, and
+   the WP5 rows of the gap table in §6.7 (the cancel that cannot stop the tree, and the
+   cancelled uninstall).
+3. The UI work: the consent dialog, the handler order, the disabled Cancel button, and the UI
+   tests of §6.6. The UI has no test tool today. This step starts after
+   `docs/designs/unattended-testing.md` is approved and its component-test level exists.
 
-*Accept:* each row of the two transition tables in §6.7 has a test that passes against the fake
-winget; the consent tests of §6.6 pass; a cancelled install leaves the ledger in its rest
-state with `target_version` cleared. WP5 and the F1 fix together are the MVP milestone.
+*Accept:*
+
+- Each row of the two transition tables in §6.7 has a test that passes against the fake
+  winget.
+- The tests of §6.6, "Tests to add", pass, for the case that the spike selected.
+- The "cancel failed" test of the §6.7 gap table passes.
+- The text `accept_source_agreements` occurs nowhere in `src-tauri/` or in the
+  `winget-executor` skill.
+- The pull request holds the skill update.
+
+WP5 and the F1 fix together are the MVP milestone.
 
 **WP6 — Library + updates.** Installed list, update badge, update one/all with summary, the
 pin model and the pin commands, and the WP6 rows of the gap table in §6.7. Before code, WP6
-must define: the pin behavior (the gap table says pin becomes a flag; what a pin blocks is
-not decided), and the consent step for read-only calls (§6.6).
-*Accept:* the update scan finds an outdated package in a test against the fake winget;
-update-all ends with each package updated, skipped or failed in the summary; a pinned package
-is not updated.
+must define:
+
+- the executor decision of §2.2 (the winget CLI or the COM API);
+- the pin behavior: the gap table says pin becomes a flag; what a pin blocks is not decided;
+- the conditions for "skipped" in `update_all`, and the set of packages in its summary;
+- the queue for operations that change the system, and the one-instance rule;
+- the consent step for read-only calls (§6.6).
+
+*Accept:* `check_updates` finds an outdated package in a test against the fake winget;
+`update_all` ends with each package of the summary set marked updated, skipped or failed. The
+pin criterion follows from the pin definition above.
 
 **WP7 — msstore source + purchase hand-off.** `msstore.rs` adapter, through the winget CLI
 only. The adapter sets `is_paid` by the rule of §6.4, and review action A17 defines how it
-reads the price data. The Buy-in-Store button and `open_store_page` are built on the branch;
-WP7 connects them to msstore items.
-*Accept:* free Store apps are resolvable; a paid item and an item with no price data show
-only the browser hand-off (no install path).
+reads the price data. The Buy-in-Store button and `open_store_page` are built on branch
+`impl/6--install-loop`; WP7 connects them to msstore items. Before code, WP7 must define: the
+winget sources that a read-only call names (§6.3), the priority rule for a merged search card
+(§5.3), and the consent step for the `msstore` winget source agreement.
+*Accept:* with `msstore` on, a search in a test returns a free Store item as a
+`PackageSummary` with `is_paid = false`; with `msstore` off, the adapter returns
+`SourceUnavailable`; a paid item and an item with no price data show only the browser
+hand-off (no install path).
 
 **WP8 — Polish.** Categories/featured, ratings/screenshots caching, the image proxy decision
 (§2.3), dark/light theme, empty/error/loading states, accessibility pass.
-*Accept:* each screen is keyboard navigable. The visual criteria are not defined: WP8 must
-write its checklist, and the maintainer must approve it, before code.
+*Accept:* not defined. Before code, WP8 must write criteria that a test can decide (the
+screens, the keyboard path on each one, the visual checklist), and the maintainer must
+approve them.
 
 **WP9 — Extra sources.** Deferred (§2.1). The first idea is Scoop and Chocolatey adapters
 behind the same traits, and a source picker in the UI. Not designed.
@@ -778,12 +866,12 @@ behind the same traits, and a source picker in the UI. Not designed.
 **WP10 — Headless mode.** Blocked (§6.5). No design is accepted; a decision record comes
 first and defines the acceptance criteria.
 
-**WP11 — Hardening.** UAC elevation for machine-scope, toast notifications, background scheduled
-update scan (Task Scheduler), winget import/export. An install of a local MSIX file is
-deferred (§2.1, review action A9). No item has a flow in §6; WP11 must add one for each item
-before code.
-*Accept:* elevation path works for admin-scope installs; scheduled scan produces toasts; import
-replays a manifest list.
+**WP11 — Hardening.** UAC elevation for the machine scope, toast notifications, background
+scheduled update scan (Task Scheduler), winget import/export. An install of a local MSIX file
+is deferred (§2.1, review action A9). No item has a flow in §6. Before code, WP11 must add a
+flow for each item, with criteria that a test can decide. The import flow must show how one
+user click for a list of packages satisfies hard rule 4.
+*Accept:* not defined; see above.
 
 ---
 
@@ -796,7 +884,10 @@ replays a manifest list.
   codes) exercises the executor and progress parser deterministically.
 - **Real winget (CI or a sandbox only):** install→verify→uninstall a tiny open-source package.
   A test must never install software on a contributor machine outside a sandbox or a CI
-  runner. The guard is in the test code, not only an `#[ignore]` mark.
+  runner. *Planned (F2, #21):* a guard in the test code refuses to run outside CI or a
+  sandbox. `docs/designs/unattended-testing.md` defines what the guard detects. Today the one
+  real test (`tests/winget_smoke.rs`) has only an `#[ignore]` mark; do not run it on a
+  contributor machine.
 - **No required manual step.** All required tests run unattended, for contributors also
   (requirement F2, #21). `docs/designs/unattended-testing.md` is the draft design for the test
   levels, the UI tests and the guard; it is not approved yet. Where it and this section
@@ -809,11 +900,23 @@ replays a manifest list.
 
 ## 9. Guardrail & review checklist (run before every merge)
 
-1. `is_paid` items have no install path in-app; only the browser hand-off.
-2. No auth/account/secret handling introduced anywhere.
+Each item names its check. "From WP5" means: after the WP5 work that remains is merged.
+
+1. `is_paid` items have no install path in-app; only the browser hand-off. Check: the test
+   that `start_install` refuses a paid item.
+2. No account, sign-in, token or password handling introduced anywhere. Check: review of the
+   diff.
 3. Catalog sources call only the destinations that hard rule 5 permits and the endpoint that
-   §0 names; timeouts + retry backoff set; no guessing/scanning endpoints.
-4. Agreements/source terms surfaced to the user; never silently pre-accepted.
-5. No Microsoft trademark/logo assets bundled; original product identity.
-6. A log row for every install/uninstall/update with timestamp and outcome. From WP6 the row
+   §0 names. Each adapter sets a timeout and a retry backoff as constants. Check: review of
+   new URLs in the diff, and the adapter test in which a slow endpoint gives a timeout error.
+4. winget source agreements and package agreements are shown to the user and never accepted
+   silently. Check, from WP5: the §6.6 test "no operation passes a flag with no consent".
+5. No Microsoft trademark/logo assets bundled; original product identity. Check: review of
+   new asset files.
+6. One `operation_log` row for each operation (§0), with a timestamp and the outcome of the
+   §6.7 end table. A consent retry is a new operation and has its own row. From WP6 the row
    also holds the exit code (§6.7 gap table, A13).
+7. From WP5: no setting, database column or file stores a consent (§6.6). Check: review of
+   the diff for new settings and columns.
+8. From WP5: the content security policy holds `script-src 'self'`, and catalog data appears
+   as text only. Check: the two tests of §6.6.
