@@ -198,6 +198,8 @@ Non-goals:
 | Windows APIs | official `windows` crate (notifications, AppModel) |
 | Install/remove engine | winget CLI invoked as a subprocess for install/update/remove |
 | Logging | tracing; operation log mirrored into SQLite |
+| Minimum Windows version | Windows 11 23H2 (build 22631). Maintainer decision of 2026-11-12: the minimum is the version on the maintainer devices. Only one device was read; a lower build on another device lowers this value. |
+| Minimum winget version | 1.29. Same decision. The code and the `winget-executor` skill say 1.6.0 today; the ADR 0001 work changes the version check. |
 
 Rationale: winget handles installer execution, hash checks, agreements, dependencies and MSIX
 deployment. The app wraps it and does not write installer logic.
@@ -229,7 +231,7 @@ adds.
 | Risk | Mitigation or owner |
 |---|---|
 | The app accepts an agreement that the user did not see. | §6.6: the app stores no consent and passes a flag only directly after a user "Accept". |
-| winget gives no agreement text without an interactive prompt, so the consent dialog has nothing to show. | The spike in §6.6 comes first in WP5. A fallback is named there and needs maintainer approval. |
+| winget gives no agreement text without an interactive prompt, so the consent dialog has nothing to show. | The spike in §6.6 comes first in WP5. A link fallback is named there; the maintainer approved it on 2026-11-12. |
 | The third-party catalog is stale or wrong (bug F1). | ADR 0001. Until it is accepted, the search results are not reliable. |
 | winget prints text with no format contract. A winget update or a non-English Windows can break a parser. | Parse by column position, not by header words. Keep a recorded-output fixture per supported winget version. On a parse failure, show an indeterminate progress bar and let the exit code decide. |
 | Two installs of different packages run together and Windows Installer refuses the second one (error 1618). | One queue for operations that change the system; WP6 (§6.7 gap table). |
@@ -590,9 +592,9 @@ opens no dialog and shows this message, which it makes from `error.code` and the
 fields: "The agreement text is not available. Store cannot install this package." In case
 (c), each `agreements_required` ends so.
 
-**The fallback of case (b) needs maintainer approval:** the maintainer decides if a link
-satisfies hard rule 4. WP5 can close in case (c). A package that needs an agreement then
-cannot install through the app until that decision.
+**The maintainer approved the fallback of case (b) on 2026-11-12:** a dialog that names the
+agreement and shows its link satisfies hard rule 4. Case (c) thus does not apply to WP5 as a
+whole. The "no text" rule stays for an operation that has no text and no link.
 
 #### Flow
 
