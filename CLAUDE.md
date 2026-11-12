@@ -36,9 +36,10 @@ elevation). `tier:any` issues are reserved for community contributors on cheaper
   (winget.run, PR #14), #4 winget executor + progress parser (PR #15), #5 Tauri IPC layer + UI
   skeleton (PR #18).
 - Built, not merged: #6 (detail page, install/uninstall/cancel, log tail) on
-  `impl/6--install-loop`, PR #19. Do not merge it before the WP5 work that remains is done:
-  SPEC §6.6 (spike, then consent flow) and the WP5 rows of the §6.7 gap table. SPEC §7, WP5,
-  gives the order.
+  `impl/6--install-loop`, PR #19. Do not merge it before the spike and the core work of WP5 are
+  done (SPEC §7, WP5, steps 1 and 2). The UI work (step 3) is a second pull request; it waits
+  for the approved `docs/designs/unattended-testing.md`. Maintainer decisions of 2026-11-12:
+  this split, the license-link fallback of SPEC §6.6, and the minimum versions in SPEC §2.
 - `docs/SPEC.md` was repaired and reviewed with EGM on 2026-11-11 and 2026-11-12. The reports
   are in `docs/reviews/2026-11-11-spec-review-2/`. A section marked *built* or *built on
   branch* follows the code; a *planned* section overrides it. Where a built section and the

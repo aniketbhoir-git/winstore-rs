@@ -8,7 +8,8 @@
 > **Status of this document (2026-11-12):** WP0 to WP4 are on `main`. WP5 is partly built: its
 > code is on branch `impl/6--install-loop` (PR #19, open). The WP5 work that remains is the
 > spike and the consent flow of §6.6 and the WP5 rows of the gap table in §6.7. PR #19 does
-> not merge before that work is done. The UI part of that work waits for the approval of
+> not merge before the spike and the core part of that work are done. Maintainer decision of
+> 2026-11-12: the UI part goes into a second pull request, after the approval of
 > `docs/designs/unattended-testing.md` (§7, WP5). Bug F1 (#20) does not gate PR #19; it gates the MVP
 > milestone (§7). WP6 to WP11 are not started. §7 gives the status of each work package.
 >
@@ -838,7 +839,7 @@ Status on 2026-11-12. The issue numbers are the GitHub issues and the entries of
 | WP2 | #3 | Built, on `main` (PR #14). The catalog service returns unrelated results: bug F1, #20. |
 | WP3 | #4 | Built, on `main` (PR #15). |
 | WP4 | #5 | Built, on `main` (PR #18). |
-| WP5 | #6 | Built on branch `impl/6--install-loop` (PR #19, open). Not merged. To merge PR #19 and close WP5: §6.6 and the WP5 rows of the gap table in §6.7. The UI step waits for the approval of `docs/designs/unattended-testing.md` and for its component-test level, which F2 (#21) owns. |
+| WP5 | #6 | Built on branch `impl/6--install-loop` (PR #19, open). Not merged. The work that remains is split (maintainer decision of 2026-11-12). To merge PR #19: steps 1 and 2 of the WP5 entry below. To close WP5: step 3 also, in a second pull request. Step 3 waits for the approval of `docs/designs/unattended-testing.md` and for its component-test level, which F2 (#21) owns. |
 | MVP milestone | #6, #20 | Reached when WP5 is closed and bug F1 (#20) is fixed. F1 is a catalog change with its own pull request (ADR 0001). |
 | WP6 to WP11 | #7 to #12 | Not started, with two exceptions. WP6: `check_updates` and `update_all` exist as commands with no UI. WP7: the Buy-in-Store button and `open_store_page` are built on branch `impl/6--install-loop`. |
 
@@ -885,7 +886,14 @@ this order:
    cancelled uninstall).
 3. The UI work: the consent dialog, the handler order, the disabled Cancel button, and the UI
    tests of §6.6. The UI has no test tool today. This step starts after
-   `docs/designs/unattended-testing.md` is approved and its component-test level exists.
+   `docs/designs/unattended-testing.md` is approved and its component-test level exists. It
+   is a second pull request.
+
+PR #19 merges after step 2. Between that merge and the merge of step 3, the UI shows
+`agreements_required` as an error with its message, and a package that needs an agreement
+cannot install through the app. PR #19 can change the UI only as far as that needs; the
+change has no automated test, which the maintainer accepted for this one case. The UI tests
+of §6.6 gate the second pull request, not PR #19.
 
 *Accept:*
 
