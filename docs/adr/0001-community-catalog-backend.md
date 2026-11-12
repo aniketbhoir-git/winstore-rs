@@ -143,9 +143,9 @@ own decision record.
 ## Condition from the SPEC review (2026-11-12)
 
 If option A is accepted, search, `get_app_detail` and the detail read in `start_install`
-become read-only winget calls. `docs/SPEC.md` §6.6 then applies to them: a call that ends
-with `agreements_required` opens the consent dialog, and the work adds the `consent` option
-to `search_sources` and `get_app_detail`. `start_install` must use the cached detail when one
+become read-only winget calls. `docs/SPEC.md` §6.6, "Read-only calls", then applies: the work
+on option A must define the consent step for these calls before it writes code, or show on a
+new machine that the `winget` source asks for no agreement. `start_install` must use the cached detail when one
 exists (SPEC §6.2, §2.3).
 
 ## Not verified
