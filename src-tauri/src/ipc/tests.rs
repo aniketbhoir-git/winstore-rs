@@ -69,6 +69,10 @@ async fn install_streams_progress_and_marks_installed() {
         .map(|e| e["stage"].as_str().unwrap().to_string())
         .collect();
     assert_eq!(stages, ["resolving", "downloading", "installing", "done"]);
+    assert!(sink
+        .named(EVENT_PROGRESS)
+        .iter()
+        .all(|e| e["cancel_failed"] == false));
 
     let rec = installs::get(&pool, &id()).await.unwrap().unwrap();
     assert_eq!(rec.state, InstallState::Installed);
@@ -259,6 +263,30 @@ async fn cancelled_reinstall_keeps_the_installed_version() {
     let rec = installs::get(&pool, &id()).await.unwrap().unwrap();
     assert_eq!(rec.state, InstallState::Installed);
     assert_eq!(rec.installed_version.as_deref(), Some("1.0.0"));
+}
+
+// End table, row 4 for an update: a cancelled update keeps the installed version.
+#[tokio::test]
+async fn cancelled_update_keeps_the_installed_version() {
+    let mut exec = FakeExec::scripted(vec![(
+        vec![OperationStage::Cancelled],
+        Err(AppError::Cancelled),
+    )]);
+    exec.updates = vec![UpdateAvailable {
+        package_id: id(),
+        installed_version: "1.0.0".into(),
+        latest_version: "2.0.0".into(),
+        source: KIND,
+        is_auto: false,
+    }];
+    let (state, pool) = state_with(false, false, exec_factory(exec)).await;
+    run_update_all(&state, Arc::new(RecordingSink::default()))
+        .await
+        .unwrap();
+    let rec = installs::get(&pool, &id()).await.unwrap().unwrap();
+    assert_eq!(rec.state, InstallState::Installed);
+    assert_eq!(rec.installed_version.as_deref(), Some("1.0.0"));
+    assert_eq!(rec.target_version, None);
 }
 
 #[tokio::test]

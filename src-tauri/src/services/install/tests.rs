@@ -353,3 +353,279 @@ async fn log_tail_is_oldest_first_and_bounded() {
     assert_eq!(log_tail(&pool, &id(), 0).await.unwrap().len(), 1);
     assert_eq!(log_tail(&pool, &id(), u32::MAX).await.unwrap().len(), 3);
 }
+
+// ---------------------------------------------------------------------------------------------
+// SPEC 6.7 "Start" and "End of an operation" rows, and the agreement stop (SPEC 6.6 case c)
+// ---------------------------------------------------------------------------------------------
+
+fn agreements(source: bool, version: Option<&str>) -> AppError {
+    AppError::AgreementsRequired {
+        source_agreements: source,
+        package_agreements: !source,
+        winget_source: Some("winget".into()),
+        version: version.map(str::to_string),
+        agreement_text: None,
+        agreement_url: None,
+    }
+}
+
+fn agreements_script() -> Vec<Script> {
+    vec![(vec![OperationStage::Failed], Err(agreements(false, None)))]
+}
+
+#[tokio::test]
+async fn agreements_stop_of_an_install_leaves_the_rest_state() {
+    // (start row, version, expected state)
+    let cases = [
+        (None, None, InstallState::NotInstalled),
+        (
+            Some(InstallState::Installed),
+            Some("2.0"),
+            InstallState::Installed,
+        ),
+        (Some(InstallState::Failed), None, InstallState::NotInstalled),
+    ];
+    for (start, version, state) in cases {
+        let exec = Arc::new(FakeExec::scripted(agreements_script()));
+        let (core, pool, sink) = setup(exec).await;
+        if let Some(s) = start {
+            seed(&pool, s, version, false).await;
+        }
+        start_install(&core, sink_of(&sink), id(), InstallRequest::default())
+            .await
+            .unwrap();
+        let fin = finished(&sink, 1).await;
+        assert_eq!(fin["ok"], false);
+        assert_eq!(fin["error"]["code"], "agreements_required");
+        let rec = ledger(&pool).await;
+        assert_eq!(rec.state, state, "{start:?}");
+        assert_eq!(rec.installed_version.as_deref(), version);
+        assert_eq!(rec.target_version, None);
+    }
+}
+
+#[tokio::test]
+async fn agreements_stop_of_an_uninstall_leaves_the_rest_state() {
+    let cases = [
+        (
+            InstallState::Installed,
+            Some("2.0"),
+            false,
+            InstallState::Installed,
+        ),
+        (
+            InstallState::Pinned,
+            Some("2.0"),
+            true,
+            InstallState::Pinned,
+        ),
+        (
+            InstallState::Failed,
+            None,
+            false,
+            InstallState::NotInstalled,
+        ),
+    ];
+    for (start, version, pinned, state) in cases {
+        let exec = Arc::new(FakeExec::scripted(agreements_script()));
+        let (core, pool, sink) = setup(exec).await;
+        seed(&pool, start, version, pinned).await;
+        start_uninstall(&core, sink_of(&sink), id()).await.unwrap();
+        let fin = finished(&sink, 1).await;
+        assert_eq!(fin["error"]["code"], "agreements_required");
+        let rec = ledger(&pool).await;
+        assert_eq!(rec.state, state, "{start}");
+        assert_eq!(rec.installed_version.as_deref(), version);
+        assert_eq!(rec.pinned, pinned);
+        assert_eq!(rec.target_version, None);
+    }
+}
+
+#[tokio::test]
+async fn agreements_error_gets_the_target_as_version_when_it_has_none() {
+    // Install without a version: the latest version of the detail.
+    let exec = Arc::new(FakeExec::scripted(agreements_script()));
+    let (core, _pool, sink) = setup(exec).await;
+    start_install(&core, sink_of(&sink), id(), InstallRequest::default())
+        .await
+        .unwrap();
+    assert_eq!(finished(&sink, 1).await["error"]["version"], "1.2.3");
+
+    // Install with a chosen version.
+    let exec = Arc::new(FakeExec::scripted(agreements_script()));
+    let (core, _pool, sink) = setup(exec).await;
+    let req = InstallRequest {
+        version: Some("1.0.0".into()),
+        scope: None,
+    };
+    start_install(&core, sink_of(&sink), id(), req)
+        .await
+        .unwrap();
+    assert_eq!(finished(&sink, 1).await["error"]["version"], "1.0.0");
+
+    // A version that the executor already set stays; an uninstall has no target.
+    let exec = Arc::new(FakeExec::scripted(vec![
+        (
+            vec![OperationStage::Failed],
+            Err(agreements(true, Some("0.9"))),
+        ),
+        (vec![OperationStage::Failed], Err(agreements(true, None))),
+    ]));
+    let (core, pool, sink) = setup(exec).await;
+    start_install(&core, sink_of(&sink), id(), InstallRequest::default())
+        .await
+        .unwrap();
+    assert_eq!(finished(&sink, 1).await["error"]["version"], "0.9");
+    seed(&pool, InstallState::Installed, Some("1.0"), false).await;
+    start_uninstall(&core, sink_of(&sink), id()).await.unwrap();
+    let fin = finished(&sink, 2).await;
+    assert_eq!(fin["error"]["code"], "agreements_required");
+    assert!(fin["error"]["version"].is_null());
+}
+
+#[tokio::test]
+async fn cancelled_uninstall_goes_to_the_rest_state() {
+    for (start, version, state) in [
+        (InstallState::Failed, None, InstallState::NotInstalled),
+        (
+            InstallState::Installed,
+            Some("2.0"),
+            InstallState::Installed,
+        ),
+    ] {
+        let (core, pool, sink) = setup(Arc::new(FakeExec::holding())).await;
+        seed(&pool, start, version, false).await;
+        let op = start_uninstall(&core, sink_of(&sink), id()).await.unwrap();
+        cancel(&core, &op.operation_id).await.unwrap();
+        assert_eq!(finished(&sink, 1).await["error"]["code"], "cancelled");
+        let rec = ledger(&pool).await;
+        assert_eq!(rec.state, state, "{start}");
+        assert_eq!(rec.installed_version.as_deref(), version);
+        assert_eq!(rec.target_version, None);
+    }
+}
+
+// Start table, row 3: `Uninstalling` and `Pinned` refuse `start_install`.
+#[tokio::test]
+async fn start_install_is_refused_from_uninstalling_and_pinned() {
+    for (start, pinned) in [
+        (InstallState::Uninstalling, false),
+        (InstallState::Pinned, true),
+    ] {
+        let (core, pool, sink) = setup(Arc::new(FakeExec::default())).await;
+        seed(&pool, start, Some("2.0"), pinned).await;
+        let err = start_install(&core, sink_of(&sink), id(), InstallRequest::default())
+            .await
+            .unwrap_err();
+        assert_eq!(err.code(), "unsupported", "{start}");
+        assert_eq!(ledger(&pool).await.state, start);
+    }
+}
+
+// Start table, row 4: a leftover `Installing` row with no active operation is accepted.
+#[tokio::test]
+async fn start_install_accepts_a_leftover_installing_row() {
+    let exec = Arc::new(FakeExec::holding());
+    let (core, pool, sink) = setup(exec).await;
+    seed(&pool, InstallState::Installing, None, false).await;
+    let op = start_install(&core, sink_of(&sink), id(), InstallRequest::default())
+        .await
+        .unwrap();
+    let rec = ledger(&pool).await;
+    assert_eq!(rec.state, InstallState::Installing);
+    assert_eq!(rec.target_version.as_deref(), Some("1.2.3"));
+    cancel(&core, &op.operation_id).await.unwrap();
+    finished(&sink, 1).await;
+}
+
+// Start table, row 5: each listed state moves to `Installing` and sets `target_version`.
+#[tokio::test]
+async fn start_install_from_each_listed_state_sets_the_target() {
+    for start in [
+        InstallState::NotInstalled,
+        InstallState::Installed,
+        InstallState::UpdateAvailable,
+        InstallState::Failed,
+    ] {
+        let (core, pool, sink) = setup(Arc::new(FakeExec::holding())).await;
+        seed(&pool, start, Some("1.0"), false).await;
+        let op = start_install(&core, sink_of(&sink), id(), InstallRequest::default())
+            .await
+            .unwrap();
+        let rec = ledger(&pool).await;
+        assert_eq!(rec.state, InstallState::Installing, "{start}");
+        assert_eq!(rec.target_version.as_deref(), Some("1.2.3"));
+        cancel(&core, &op.operation_id).await.unwrap();
+        finished(&sink, 1).await;
+    }
+}
+
+// Start table, rows 6 and 7: `start_uninstall`.
+#[tokio::test]
+async fn start_uninstall_by_ledger_state() {
+    for start in [InstallState::Installing, InstallState::Uninstalling] {
+        let (core, pool, sink) = setup(Arc::new(FakeExec::default())).await;
+        seed(&pool, start, Some("1.0"), false).await;
+        let err = start_uninstall(&core, sink_of(&sink), id())
+            .await
+            .unwrap_err();
+        assert_eq!(err.code(), "unsupported", "{start}");
+        assert_eq!(ledger(&pool).await.state, start);
+    }
+    for (start, pinned) in [
+        (InstallState::Installed, false),
+        (InstallState::UpdateAvailable, false),
+        (InstallState::Failed, false),
+        (InstallState::Pinned, true),
+    ] {
+        let (core, pool, sink) = setup(Arc::new(FakeExec::holding())).await;
+        seed(&pool, start, Some("1.0"), pinned).await;
+        let op = start_uninstall(&core, sink_of(&sink), id()).await.unwrap();
+        assert_eq!(ledger(&pool).await.state, InstallState::Uninstalling);
+        cancel(&core, &op.operation_id).await.unwrap();
+        finished(&sink, 1).await;
+    }
+}
+
+// Start table, row 8: winget absent refuses either command and changes nothing.
+#[tokio::test]
+async fn winget_absent_refuses_install_and_uninstall() {
+    let factory: crate::ipc::state::ExecutorFactory =
+        Arc::new(|| Box::pin(async { Err(AppError::WingetNotFound) }));
+    let (state, pool): (AppState, DbPool) = state_with(false, false, factory).await;
+    let core = state.core().await.unwrap();
+    let sink = Arc::new(RecordingSink::default());
+    seed(&pool, InstallState::Installed, Some("1.0"), false).await;
+    let e = start_uninstall(&core, sink_of(&sink), id())
+        .await
+        .unwrap_err();
+    assert_eq!(e.code(), "winget_not_found");
+    assert_eq!(ledger(&pool).await.state, InstallState::Installed);
+    let e = start_install(&core, sink_of(&sink), id(), InstallRequest::default())
+        .await
+        .unwrap_err();
+    assert_eq!(e.code(), "winget_not_found");
+    assert_eq!(ledger(&pool).await.state, InstallState::Installed);
+}
+
+// End table, row 2: an install that fails while a version is recorded keeps it.
+#[tokio::test]
+async fn failed_install_with_a_version_keeps_installed() {
+    let exec = Arc::new(FakeExec::scripted(vec![(
+        vec![OperationStage::Failed],
+        Err(AppError::DeploymentFailed("x".into())),
+    )]));
+    let (core, pool, sink) = setup(exec).await;
+    seed(&pool, InstallState::Installed, Some("1.0"), false).await;
+    start_install(&core, sink_of(&sink), id(), InstallRequest::default())
+        .await
+        .unwrap();
+    assert_eq!(
+        finished(&sink, 1).await["error"]["code"],
+        "deployment_failed"
+    );
+    let rec = ledger(&pool).await;
+    assert_eq!(rec.state, InstallState::Installed);
+    assert_eq!(rec.installed_version.as_deref(), Some("1.0"));
+    assert_eq!(rec.target_version, None);
+}

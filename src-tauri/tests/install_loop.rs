@@ -306,3 +306,35 @@ async fn failed_install_records_failed_and_the_reason() {
     let log = run_operation_log(&fx.state, PKG, None).await.unwrap();
     assert!(log.iter().any(|e| e.level == LogLevel::Error));
 }
+
+#[tokio::test]
+async fn agreements_required_leaves_the_rest_state_and_reports_dialog_data() {
+    for (code, source_kind) in [("0x8A150041", false), ("0x8A150046", true)] {
+        for (requested, expected) in [(Some("1.0"), "1.0"), (None, "1.2.3")] {
+            let fx = Fx::new().await;
+            fx.script(&format!("exit {code}\n"));
+            let opts = InstallOptions {
+                version: requested.map(str::to_string),
+                scope: None,
+            };
+            run_start_install(&fx.state, fx.sink(), PKG, opts)
+                .await
+                .unwrap();
+            let fin = fx.sink.finished(1).await;
+            assert_eq!(fin["ok"], false, "{fin}");
+            let err = &fin["error"];
+            assert_eq!(err["code"], "agreements_required");
+            assert_eq!(err["source_agreements"], source_kind);
+            assert_eq!(err["package_agreements"], !source_kind);
+            assert_eq!(err["winget_source"], "winget");
+            assert_eq!(err["version"], expected, "{fin}");
+            assert!(err["agreement_text"].is_null() && err["agreement_url"].is_null());
+            assert_eq!(fx.ledger().await, (InstallState::NotInstalled, None, None));
+            let log = run_operation_log(&fx.state, PKG, None).await.unwrap();
+            assert!(log.iter().all(|e| e.level != LogLevel::Error), "{log:#?}");
+            assert!(log
+                .iter()
+                .any(|e| e.level == LogLevel::Info && e.message.contains("stopped")));
+        }
+    }
+}

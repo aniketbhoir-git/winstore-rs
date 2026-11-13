@@ -9,7 +9,11 @@
 //! | operation        | success        | cancelled                     | failed                        |
 //! |------------------|----------------|-------------------------------|-------------------------------|
 //! | install / update | `Installed`    | prior version ? `Installed` : `NotInstalled` | prior version ? `Installed` : `Failed` |
-//! | uninstall        | `NotInstalled` | `Installed` (or `Pinned`)     | `Failed` (version kept)       |
+//! | uninstall        | `NotInstalled` | rest state                    | `Failed` (version kept)       |
+//!
+//! The rest state is `Installed` (`Pinned` with the pin flag) when a version is recorded and
+//! `NotInstalled` when not. An `agreements_required` ending of any operation also goes to the
+//! rest state (SPEC §6.6 case c: the app never passes an agreement flag), not to `Failed`.
 //!
 //! `target_version` is cleared whenever an operation ends, so a cancelled install leaves no
 //! trace of the attempt in the ledger (the operation log keeps the history).
@@ -326,12 +330,18 @@ pub(crate) async fn drive(
     while let Some(ev) = handle.events.recv().await {
         events::emit_progress(sink.as_ref(), &ev);
     }
-    let result = match handle.outcome.await {
+    let mut result = match handle.outcome.await {
         Ok(r) => r,
         Err(_) => Err(AppError::DeploymentFailed(
             "the operation ended without a result".into(),
         )),
     };
+    // SPEC §1.3 `version`: when the request gave winget no version, the target stands in.
+    if let Err(AppError::AgreementsRequired { version, .. }) = &mut result {
+        if version.is_none() {
+            version.clone_from(&target);
+        }
+    }
     if let Err(e) = settle(&core.pool, id, op, target, &result).await {
         tracing::error!(package = %id, "could not update install ledger: {e}");
     }
@@ -393,7 +403,15 @@ pub(crate) async fn settle(
             rec.last_updated = Some(now_unix());
             InstallState::NotInstalled
         }
-        (Operation::Remove, Err(AppError::Cancelled)) => InstallState::Installed,
+        // The rest state: an agreement stop (any operation) and a cancelled uninstall.
+        (_, Err(AppError::AgreementsRequired { .. }))
+        | (Operation::Remove, Err(AppError::Cancelled)) => {
+            if had_version {
+                InstallState::Installed
+            } else {
+                InstallState::NotInstalled
+            }
+        }
         (Operation::Remove, Err(_)) => InstallState::Failed,
         (_, Ok(())) => {
             rec.installed_version = target.or(rec.installed_version.take());
