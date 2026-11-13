@@ -114,6 +114,7 @@ Full table with verified/inferred marks: `references/winget-cli.md`. Exit codes 
 |---|---|---|
 | 0 | success | Done |
 | 0x8A150014 | NO_APPLICATIONS_FOUND | `PackageNotFound(id)` |
+| 0x8A150017 | NO_MANIFEST_FOUND (version not found) | not mapped yet; WP5 step 2 decides (spike Q2) |
 | 0x8A150010 | NO_APPLICABLE_INSTALLER | `Unsupported("no installer for this system")` |
 | 0x8A150011 | INSTALLER_HASH_MISMATCH | `WingetFailed` (security; never offer an override) |
 | 0x8A15002B | UPDATE_NOT_APPLICABLE | Done, no-op |
@@ -126,6 +127,38 @@ Full table with verified/inferred marks: `references/winget-cli.md`. Exit codes 
 Correction to the original brief: 0x8A150010 is NO_APPLICABLE_INSTALLER (not "no applications
 found"), 0x8A150011 is the hash mismatch, 0x8A150027 is a LibYAML error (not elevation), and
 0x8A150018..1C are extension/admin/security/store-policy codes. Trust the table in the reference.
+
+## Agreements (spike of 2026-11-13)
+
+Answers to the spike questions of SPEC §6.6. Evidence, commands and source lines:
+`docs/spikes/2026-11-13-agreement-consent.md`. winget v1.29.380. SPEC §6.6 overrides the hard
+rule and the flag rows above until WP5 updates them.
+
+1. **Agreement text.** It comes from the agreement data of the package manifest
+   (`Agreements: [{AgreementLabel, Agreement, AgreementUrl}]`) or of the REST source
+   information (`SourceAgreements`). Each agreement is a label, an optional text and an optional
+   URL. With `--disable-interactivity` and no flag, winget prints the block on stdout and then
+   exits 0x8A150041 (package) or 0x8A150046 (source). `winget show --id <id> --version <v>
+   --source <s> --disable-interactivity` prints the package block before any install.
+   - Package block (install): starts with `Agreements for <name> [<id>] Version <v>`, then the
+     show fields, then `Agreements:` and one `  <Label>: <text or URL>` line per agreement.
+     Ends with `Package agreements were not agreed to. Operation cancelled.`
+   - Source block: starts with ``The `<source>` source requires that you view the following
+     agreements before using.``, then `<Label>: <text and/or URL>`. Ends with `One or more of the
+     source agreements were not agreed to. ...`
+   - OBSERVED: every agreement found (msstore source, msstore packages, `Microsoft.PowerBI` in
+     the winget source) has a label and a URL and **no text**. Only REST sources (msstore) have a
+     source agreement; the `winget` source has none (INFERRED from source).
+   - `ProgressParser::agreements_shown()` matches the install disclaimer lines, which winget
+     prints for every install. It does not detect an agreement.
+2. **Missing `--version` on install:** 0x8A150017 NO_MANIFEST_FOUND, `No version found
+   matching: <v>`. Not 0x8A150014. Observed on `show`; install uses the same function
+   (source). Confirm at the first real-winget CI run (F2, #21).
+3. **`winget uninstall` flags:** `--accept-source-agreements` only (VERIFIED in `--help` and by
+   a run). `--accept-package-agreements` on uninstall exits 0x8A150002.
+- winget stores a source acceptance per source name, keyed by `AgreementsIdentifier` and the
+  implicit `market` field, and asks again only when one of them changes. It stores no package
+  acceptance: each install of a package with agreements needs the flag again.
 
 ## Stage mapping
 

@@ -167,6 +167,7 @@ winget exit code is the HRESULT as u32. Rust on Windows reports it as i32 (decim
 | 0x8A150011 | -1978335215 | APPINSTALLER_CLI_ERROR_INSTALLER_HASH_MISMATCH | VERIFIED | The installer file's hash does not match the manifest |
 | 0x8A150014 | -1978335212 | APPINSTALLER_CLI_ERROR_NO_APPLICATIONS_FOUND | VERIFIED | No packages found |
 | 0x8A150016 | -1978335210 | APPINSTALLER_CLI_ERROR_MULTIPLE_APPLICATIONS_FOUND | VERIFIED | Multiple packages found matching the criteria |
+| 0x8A150017 | -1978335209 | APPINSTALLER_CLI_ERROR_NO_MANIFEST_FOUND | VERIFIED | No version found matching the requested version (OBSERVED 2026-11-13 on `show --version`; install from source, see docs/spikes/2026-11-13-agreement-consent.md) |
 | 0x8A150019 | -1978335207 | APPINSTALLER_CLI_ERROR_COMMAND_REQUIRES_ADMIN | VERIFIED | Command requires administrator privileges to run |
 | 0x8A15001B | -1978335205 | APPINSTALLER_CLI_ERROR_MSSTORE_BLOCKED_BY_POLICY | VERIFIED | The Microsoft Store client is blocked by policy |
 | 0x8A15001C | -1978335204 | APPINSTALLER_CLI_ERROR_MSSTORE_APP_BLOCKED_BY_POLICY | VERIFIED | The Microsoft Store app is blocked by policy |
