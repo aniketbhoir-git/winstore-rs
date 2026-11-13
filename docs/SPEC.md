@@ -7,9 +7,9 @@
 
 > **Status of this document (2026-11-13):** WP0 to WP4 are on `main`. WP5 is partly built: its
 > code is on branch `impl/6--install-loop` (PR #19, open). The spike of §6.6 is done
-> (`docs/spikes/2026-11-13-agreement-consent.md`); the maintainer selected case (c) for WP5 on 2026-11-13. The WP5 work that
-> remains is the case (c) part of §6.6 and the WP5 rows of the gap table in §6.7. PR #19 does
-> not merge before the spike and the core part of that work are done. Maintainer decision of
+> (`docs/spikes/2026-11-13-agreement-consent.md`); the maintainer selected case (c) for WP5 on 2026-11-13. The core
+> work of WP5 (step 2: case (c) of §6.6 and the WP5 rows of the gap table in §6.7) is built on
+> the branch. PR #19 can merge after the maintainer's review. Step 3 (the UI work) remains. Maintainer decision of
 > 2026-11-12: the UI part goes into a second pull request, after the approval of
 > `docs/designs/unattended-testing.md` (§7, WP5). Bug F1 (#20) does not gate PR #19; it gates the MVP
 > milestone (§7). WP6 to WP11 are not started. §7 gives the status of each work package.
@@ -22,8 +22,7 @@
 >   document. Do not rebuild code that exists.
 > - A section or a sentence marked *planned* is the plan. It overrides the code.
 > - winget flags, exit codes and output formats are in the `winget-executor` skill
->   (`.claude/skills/winget-executor/SKILL.md`), not here. **Exception:** for agreement flags,
->   §6.6 overrides the skill until WP5 updates the skill.
+>   (`.claude/skills/winget-executor/SKILL.md`), not here.
 > - Open review actions (ids A1 to A25) are in `docs/reviews/2026-11-11-spec-review.md`. An id
 >   such as "A5" in this document names one action in that file; the text next to the id says
 >   what the action decides.
@@ -152,8 +151,7 @@ WP10 adds a mode for headless Windows Server machines; its design is not decided
 - Every error maps to: (stable string `code`, human message, optional raw detail for logs,
   is_retryable flag). IPC returns this as JSON; logs record the raw detail.
 - In one `AgreementsRequired` error, exactly one of the two fields is true. winget reports one
-  kind of agreement at a time. On the branch the JSON does not carry the two fields, so the UI
-  cannot see which kind is missing. *Planned (WP5):* the JSON of `agreements_required` also
+  kind of agreement at a time. *Built on the branch (WP5):* the JSON of `agreements_required`
   carries `source_agreements` and `package_agreements`, and the data for the consent dialog
   of §6.6:
   - `winget_source`: the name of the winget source that the operation used.
@@ -164,7 +162,10 @@ WP10 adds a mode for headless Windows Server machines; its design is not decided
     `license_url` of the package detail (§4.2). For a source agreement it is the URL that
     winget prints, if the spike finds one.
 
-  The executor fills these fields before the operation ends.
+  The executor fills `winget_source` and `version` (the requested version) before the operation
+  ends. The service (`services/install.rs`) fills `version` with the latest version of the
+  detail when the request gave none. In WP5 (case (c)) `agreement_text` and `agreement_url` are
+  always `null`; F4 fills them.
 
 ### 1.4 Goals and non-goals
 
@@ -336,10 +337,11 @@ The values of `Operation` and `OperationStage` are shown as their wire strings.
   store product id (optional; WP7 adds it).
 - `PackageDetail`: everything in Summary plus full description, screenshots, website, license,
   release notes, installer metadata (architecture, install type, size, sha256), map of
-  available versions. *Planned (WP5, §6.6):* `license_url` (optional), from the catalog data.
+  available versions. *Planned (with case (b), F4; §6.6):* `license_url` (optional), from the
+  catalog data. It only feeds `agreement_url`.
 - `ProgressEvent`: operation id, package id, operation kind, stage, fraction (0.0–1.0),
-  message, timestamp. *Planned (WP5, §6.7 gap table):* `cancel_failed` (boolean, default
-  false).
+  message, timestamp, and `cancel_failed` (boolean, default false; *built on the branch*,
+  §6.7 gap table).
 - `UpdateAvailable`: package id, installed version, latest version, source, is_auto. `is_auto`
   is reserved: no work package defines automatic updates.
 - `OperationStarted`: operation id.
@@ -454,14 +456,14 @@ the error code `cancelled`; the UI must not show that as a failure.
    UI uses the `search_id` to drop a late answer to an old query.
 4. Frontend renders cards; clicking one calls `get_app_detail`.
 
-### 6.2 Install (community app) (WP5, built on branch; steps 1 and 2 have a planned part)
+### 6.2 Install (community app) (WP5, built on branch; step 1 has a planned part)
 1. `start_install(package_id)` reads the detail, refuses a paid item, checks the ledger (§6.7),
    starts winget, sets `InstallState::Installing` and opens a `ProgressEvent` stream.
    *Planned (with the ADR 0001 work):* it uses the cached detail when one exists, so that a
    slow catalog read does not delay the install (§2.3).
 2. The executor runs a silent, non-interactive winget install with an exact id match and a
-   named winget source. *Planned (§6.6):* it passes an agreement flag only directly after the user
-   accepted that agreement. *On the branch:* the flags come from a config value.
+   named winget source. It passes no agreement flag in any case (§6.6, case (c)). *Planned (case
+   (b), F4):* it passes an agreement flag only directly after the user accepted that agreement.
 3. winget's stdout/stderr is parsed into staged progress; each parse updates the stream.
 4. The exit code decides the result, and §6.7 gives the ledger state for each result. The
    stream ends with one terminal event.
@@ -499,7 +501,7 @@ Blocked. Do not implement. A decision record must first answer `docs/STRATEGY.md
 question 6: the hosting model, authentication in each mode, origin checks, consent over HTTP
 (§6.6), and winget on Windows Server.
 
-### 6.6 Agreement consent (WP5, planned)
+### 6.6 Agreement consent (WP5; case (c) built on branch, case (b) planned as F4)
 
 Hard rule 4 applies. The app never accepts an agreement that the user did not see.
 
@@ -530,7 +532,8 @@ in the webview can thus send a consent that no user gave. WP5 must keep foreign 
 the webview:
 
 1. Set a content security policy in `tauri.conf.json` with `script-src 'self'` and no inline
-   script. On the branch no policy is set.
+   script. Built on the branch: `app.security.csp` and `devCsp` hold it; the test
+   `src-tauri/tests/csp_policy.rs` checks it.
 2. Show each piece of catalog data (name, description, release notes, agreement text) as
    text. Never put it into the page as HTML. On the branch the UI obeys this; a test must
    keep it so.
@@ -653,43 +656,47 @@ call only.
 - Remove `accept_source_agreements` from `AppConfig`, the config type in `config.rs`. On the
   branch on 2026-11-11 it sets the source and package agreement flags for each operation,
   which is the silent acceptance that rule 4 forbids. It defaults to false, and no screen sets
-  it, so no user loses a setting.
+  it, so no user loses a setting. *Built on the branch (2026-11-13).*
 - Add `options.consent` to `start_install` (§5.4, §4.2), and to `start_uninstall` if spike
-  question 3 permits it. In case (c) of the spike table, add neither.
+  question 3 permits it. In case (c) of the spike table, add neither. *Not built in case (c);
+  case (b), F4.*
 - Add the dialog data to the `agreements_required` error (§1.3) and `license_url` to
-  `PackageDetail` (§4.2).
-- Add the "winget needs an agreement" row of §6.7 to the code. On the branch this case is
-  recorded as a failure.
-- Set the content security policy and add the text-only test of "Trust boundary".
+  `PackageDetail` (§4.2). *The error data is built on the branch. `license_url` moves to F4,
+  case (b).*
+- Add the "winget needs an agreement" row of §6.7 to the code. *Built on the branch.*
+- Set the content security policy and add the text-only test of "Trust boundary". *The policy
+  and its test are built on the branch. The text-only UI test is step 3.*
 - Add the consent dialog. The UI must read `error.code`; on the branch it reads only
-  `cancelled`.
+  `cancelled`. *Step 3 (the handler order). No dialog in case (c); case (b), F4.*
 - Update the `winget-executor` skill (hard rules, command lines, test list, state notes) to
-  this section, in the same pull request. On 2026-11-12 its lines 19, 52, 54, 61 and 153
-  state the config rule, and its lines 135-136, 146 and 161 state the old cancel rule.
+  this section, in the same pull request. *Done on the branch (2026-11-13).*
 
 Files that the change touches. Paths are relative to `src-tauri/src/` unless they start with
-`ui/`, `src-tauri/` or `.claude/`:
+`ui/`, `src-tauri/` or `.claude/`. Status on 2026-11-13: each row is built on the branch,
+except where its last words say otherwise:
 
 | File | Change |
 |---|---|
 | `config.rs` | Remove the field and the test `default_has_agreements_off`. The test `modified_round_trips` drops the field and stays. |
 | `ipc/state.rs` | Stop the copy of the config value into the executor options. |
-| `executor/mod.rs` | `InstallRequest` carries the consent. If spike question 3 permits it, `PackageExecutor::remove` gets a request, so that a consent can reach it. `PackageExecutor::update` does not change. |
-| `executor/winget_cli.rs` | Remove `WingetOptions.accept_agreements`. Six argument builders read it today. After the change the install builder takes the flags from the request, and so does the remove builder if spike question 3 permits it. The builders with no consent in WP5 (`list_installed_args`, `list_updates_args`, `pin_args`, `update_args`) pass no flag. `finish()` writes an Info row, not an Error row, for `agreements_required`, and fills the dialog data of the error (§1.3). The function that stops the tree becomes a field of the executor, and the "cancel failed" event is added (§6.7 gap table). |
-| `services/install.rs`, `services/install/tests.rs` | `settle()` gets a case for `AgreementsRequired` before the general failure case, and the planned cancel rule for an uninstall. Update the table in the module comment. If spike question 3 permits it, `start_uninstall` takes the request and passes it to `remove`, and its calls in the tests change. |
+| `executor/mod.rs` | `InstallRequest` carries the consent. If spike question 3 permits it, `PackageExecutor::remove` gets a request, so that a consent can reach it. `PackageExecutor::update` does not change. *Not in case (c); F4.* |
+| `executor/winget_cli.rs` | Remove `WingetOptions.accept_agreements`. Six argument builders read it today. After the change the install builder takes the flags from the request, and so does the remove builder if spike question 3 permits it. The builders with no consent in WP5 (`list_installed_args`, `list_updates_args`, `pin_args`, `update_args`) pass no flag. `finish()` writes an Info row, not an Error row, for `agreements_required`, and fills the dialog data of the error (§1.3). The function that stops the tree becomes a field of the executor, and the "cancel failed" event is added (§6.7 gap table). In case (c) no builder takes a consent. |
+| `services/install.rs`, `services/install/tests.rs` | `settle()` gets a case for `AgreementsRequired` before the general failure case, and the planned cancel rule for an uninstall. Update the table in the module comment. If spike question 3 permits it, `start_uninstall` takes the request and passes it to `remove`, and its calls in the tests change. *The request part is not in case (c); F4.* |
 | `error.rs` | Serialize the two agreement fields and the dialog data (§1.3). |
-| `domain/package.rs`, `domain/progress.rs` | `license_url` on `PackageDetail`. `cancel_failed` on `ProgressEvent`. |
-| `ipc/commands.rs`, `ipc/test_support.rs` | The `consent` option on the commands. `FakeExec` implements the changed trait. |
+| `domain/package.rs`, `domain/progress.rs` | `license_url` on `PackageDetail` (*not built; F4, case (b)*). `cancel_failed` on `ProgressEvent`. |
+| `ipc/commands.rs`, `ipc/test_support.rs` | The `consent` option on the commands. `FakeExec` implements the changed trait. *Not in case (c); F4.* |
 | `src-tauri/tauri.conf.json` | The content security policy. |
-| `ui/src/lib/api.ts`, `types.ts`, `operations.svelte.ts` | The option, the error fields, `license_url`, `cancel_failed`, the handler order. |
-| `ui/src/components/ConsentDialog.svelte` | New. Not in case (c). |
+| `ui/src/lib/api.ts`, `types.ts`, `operations.svelte.ts` | The option, the error fields, `license_url`, `cancel_failed`, the handler order. *Step 3; the option and `license_url` are F4.* |
+| `ui/src/components/ConsentDialog.svelte` | New. Not in case (c). *F4.* |
 | `src-tauri/tests/fixtures/fake_winget.rs` | Only if a new case needs it. The fake returns the two agreement exit codes today. |
 
 An update that needs an agreement ends with `agreements_required` in WP5, and the UI shows it
 as an error. WP6 defines consent for an update (§7).
 
-Tests that assert the config rule today. Rewrite each one to assertions that follow the
-consent:
+Tests that asserted the config rule on 2026-11-11. Each one is rewritten on the branch to
+assertions with no agreement flag in any case (`install_passes_no_agreement_flag_in_any_case`,
+`no_command_passes_an_agreement_flag`, `no_builder_passes_an_agreement_flag`); the smoke test
+passes no flag and no longer reads `STORE_SMOKE_ACCEPT`. The list names them as they were:
 
 - `executor/winget_cli.rs`: `agreement_flags_only_when_accepted`,
   `pin_agreements_flag_only_when_accepted`.
@@ -698,13 +705,17 @@ consent:
   `list_updates_parses_table_and_skips_unmatched_rows`.
 - `tests/winget_smoke.rs`: `install_then_remove_one_small_package`.
 
-Edits that are not a rewrite: the fixture `Fx::new` in `tests/install_loop.rs` and the helper
-`Fx::accepting` in `tests/executor_winget.rs` set the removed option.
+Edits that were not a rewrite: the fixture `Fx::new` in `tests/install_loop.rs` set the removed
+option, and the helper `Fx::accepting` in `tests/executor_winget.rs` is removed.
 
 Tests to add. The tests for the two agreement exit codes exist in
 `tests/executor_winget.rs` and in `executor/winget_parse.rs`; reuse them and add tests at the
 ledger and service level. The tag after each test names the cases of the spike table in which
-it applies:
+it applies. Status on 2026-11-13: the (a, b, c) tests outside `ui/` are built on the branch
+(`agreements_required_carries_dialog_data_and_logs_info`,
+`agreements_required_on_remove_and_update_has_source_and_no_version`,
+`cancel_that_cannot_stop_the_tree_emits_one_cancel_failed_event`, `csp_policy.rs`); the (a, b)
+tests are F4; the UI tests are step 3:
 
 - (a, b) An accepted retry passes only the accepted flags and `options.version`. This test
   runs against the subprocess fake (`tests/install_loop.rs`, `tests/executor_winget.rs`),
@@ -768,19 +779,16 @@ executor (`executor/winget_cli.rs`) writes the `operation_log` row of the operat
 | Install | Cancel, no version before | `cancelled` | `NotInstalled` | Info | `cancelled` |
 | Uninstall | Success | `done` | `NotInstalled`; version and pin cleared | Info | none |
 | Uninstall | Failure | `failed` | `Failed`; version kept | Error | from the exit code |
-| Uninstall | Cancel | `cancelled` | `Installed`. *Planned (WP5):* the rest state | Info | `cancelled` |
-| Any | winget needs an agreement (*planned, §6.6*) | `failed` | The rest state | Info | `agreements_required` |
+| Uninstall | Cancel | `cancelled` | The rest state | Info | `cancelled` |
+| Any | winget needs an agreement | `failed` | The rest state | Info | `agreements_required` |
 
 - A row that has the pin flag goes back to `Pinned` where the table says `Installed`.
 - The exit code map is in the `winget-executor` skill.
-- On the branch, "winget needs an agreement" follows the failure rows: `Failed` and an Error
-  row for a first install. WP5 changes it to the row above.
 - The rest state does not keep an earlier `Failed`: a package that was `Failed` with no
   version is `NotInstalled` after an agreement stop or a cancelled uninstall. Each edge that
   the rest state needs is legal today.
-- On the branch, a cancelled uninstall always gives `Installed`. An uninstall can start from
-  `Failed` with no version, and the cancel then records `Installed` for a package with no
-  version. The planned text in the table corrects this (gap table).
+- A cancelled uninstall goes to the rest state. An uninstall can start from `Failed` with no
+  version; the cancel then gives `NotInstalled`, not `Installed`.
 - `Failed` after a failed uninstall keeps the version. The app is probably still installed,
   and the ledger cannot say so. A failed install with a version keeps `Installed`, because the
   earlier version is still there. The gap table has the fix for the uninstall case.
@@ -796,8 +804,12 @@ executor (`executor/winget_cli.rs`) writes the `operation_log` row of the operat
   and does not undo an installer that already started to write; winget and the installer own
   those files.
 - When the app cannot stop the tree (an elevated installer), the operation continues and its
-  real outcome settles the ledger. The executor writes a Warn row to `operation_log`. A second cancel for
-  the same operation does nothing.
+  real outcome settles the ledger. The executor writes a Warn row to `operation_log`. It also
+  emits one `store:progress` event with the stage unchanged, `cancel_failed` = true and the
+  message "cancel failed: the installer continues". The send waits for room for 2 s at most
+  and never uses the slot of the terminal event; after 2 s it writes a Warn row. The UI
+  disables Cancel for that operation (step 3). A second cancel for the same operation does
+  nothing.
 
 #### Restart
 
@@ -812,10 +824,10 @@ The review ids are from `docs/reviews/2026-11-11-spec-review.md`.
 
 | Review id | Gap | Planned fix | Owner |
 |---|---|---|---|
-| none | A cancel that cannot stop the tree is not reported to the UI. The Cancel button stays and does nothing. | The condition: the tree is still alive after the Job Object stop and after `taskkill` (the site of the Warn row in `executor/winget_cli.rs`). The executor then emits one `store:progress` event with the stage unchanged, `cancel_failed` = true (§4.2) and the message "cancel failed: the installer continues". The progress call of today can drop an event. This send waits for room in the channel, for 2 s at most; after 2 s the executor writes a Warn row and continues. The send must not use the slot that is kept for the terminal event. The UI disables Cancel for that operation when `cancel_failed` is true; it does not match the message text. Test seam: the function that stops the tree becomes a field of the executor, with the real `kill_tree` as the default. Test: a stop function that reports a live tree. | WP5 |
-| A2 | No agreement consent. | §6.6. | WP5 |
+| none | A cancel that cannot stop the tree is not reported to the UI. The Cancel button stays and does nothing. | *Fixed on the branch (2026-11-13); the UI part, to disable Cancel, is step 3.* The condition: the tree is still alive after the Job Object stop and after `taskkill` (the site of the Warn row in `executor/winget_cli.rs`). The executor then emits one `store:progress` event with the stage unchanged, `cancel_failed` = true (§4.2) and the message "cancel failed: the installer continues". The progress call of today can drop an event. This send waits for room in the channel, for 2 s at most; after 2 s the executor writes a Warn row and continues. The send must not use the slot that is kept for the terminal event. The UI disables Cancel for that operation when `cancel_failed` is true; it does not match the message text. Test seam: the function that stops the tree becomes a field of the executor, with the real `kill_tree` as the default. Test: a stop function that reports a live tree. | WP5 |
+| A2 | No agreement consent. | §6.6. *Case (c) is built on the branch (2026-11-13); case (b) is F4.* | WP5 |
 | none | `check_updates` names no winget source, so it queries each winget source that is configured. | Name the `winget` winget source (§6.3). | WP6 |
-| none | A cancelled uninstall records `Installed` when no version is recorded. | The cancel goes to the rest state. | WP5 |
+| none | A cancelled uninstall records `Installed` when no version is recorded. | The cancel goes to the rest state. *Fixed on the branch (2026-11-13).* | WP5 |
 | A24 | "An operation is active" returns `unsupported`, and the UI cannot separate it from other refusals. | Add the code `busy`, retryable. | WP6 |
 | none | The recorded version is the catalog target, not the version that winget installed. | After a success, read the version from the installed list. Keep the target as the fallback and write a Warn row on a difference. | The F1 fix |
 | A10 | After a failed uninstall and after a restart, the ledger guesses. | Check the installed list and set `Installed` or `NotInstalled` from it. Keep `Failed` for "install tried, no version". | WP6 |
@@ -835,7 +847,7 @@ The review ids are from `docs/reviews/2026-11-11-spec-review.md`.
 WP6 does not wait for the F1 fix. The gap row "recorded version" of §6.7 belongs to the F1
 fix, in whatever order the two land.
 
-Status on 2026-11-12. The issue numbers are the GitHub issues and the entries of
+Status on 2026-11-13. The issue numbers are the GitHub issues and the entries of
 `docs/ISSUE-BACKLOG.md`.
 
 | WP | Issue | Status |
@@ -845,7 +857,7 @@ Status on 2026-11-12. The issue numbers are the GitHub issues and the entries of
 | WP2 | #3 | Built, on `main` (PR #14). The catalog service returns unrelated results: bug F1, #20. |
 | WP3 | #4 | Built, on `main` (PR #15). |
 | WP4 | #5 | Built, on `main` (PR #18). |
-| WP5 | #6 | Built on branch `impl/6--install-loop` (PR #19, open). Not merged. The work that remains is split (maintainer decision of 2026-11-12). To merge PR #19: steps 1 and 2 of the WP5 entry below. To close WP5: step 3 also, in a second pull request. Step 3 waits for the approval of `docs/designs/unattended-testing.md` and for its component-test level, which F2 (#21) owns. |
+| WP5 | #6 | Built on branch `impl/6--install-loop` (PR #19, open). Not merged. The work that remains is split (maintainer decision of 2026-11-12). Steps 1 and 2 of the WP5 entry below are done (2026-11-13); PR #19 can merge after the maintainer's review. To close WP5: step 3, in a second pull request. Step 3 waits for the approval of `docs/designs/unattended-testing.md` and for its component-test level, which F2 (#21) owns. |
 | MVP milestone | #6, #20 | Reached when WP5 is closed and bug F1 (#20) is fixed. F1 is a catalog change with its own pull request (ADR 0001). |
 | WP6 to WP11 | #7 to #12 | Not started, with two exceptions. WP6: `check_updates` and `update_all` exist as commands with no UI. WP7: the Buy-in-Store button and `open_store_page` are built on branch `impl/6--install-loop`. |
 
@@ -887,15 +899,15 @@ this order:
 1. ✅ The spike of §6.6, done on 2026-11-13 (`docs/spikes/2026-11-13-agreement-consent.md`). Result: not (a). The maintainer
    selected case (c) for WP5; case (b) is later work (backlog F4). In case (c),
    `start_uninstall` gets no `options`.
-2. The core work: the parts of "Changes that WP5 owns" in §6.6 that are outside `ui/`, and
-   the WP5 rows of the gap table in §6.7 (the cancel that cannot stop the tree, and the
-   cancelled uninstall).
+2. ✅ The core work, done on 2026-11-13: the parts of "Changes that WP5 owns" in §6.6 that
+   are outside `ui/`, and the WP5 rows of the gap table in §6.7 (the cancel that cannot stop
+   the tree, and the cancelled uninstall).
 3. The UI work: the handler order, the "no text" message, the disabled Cancel button, and the
    UI tests of §6.6 with the tag (a, b, c). In case (c) there is no consent dialog. The UI has no test tool today. This step starts after
    `docs/designs/unattended-testing.md` is approved and its component-test level exists. It
    is a second pull request.
 
-PR #19 merges after step 2. Between that merge and the merge of step 3, the UI shows
+PR #19 can merge after the maintainer's review. Between that merge and the merge of step 3, the UI shows
 `agreements_required` as an error with its message. In case (c), a package that needs an
 agreement cannot install through the app until the work of backlog F4 is done. PR #19 can change the UI only as far as that needs; the
 change has no automated test, which the maintainer accepted for this one case. The UI tests

@@ -218,13 +218,17 @@ Fix these in `docs/SPEC.md` before more work packages start. Details are in the 
 - **A2:** ✅ consent model defined in SPEC §6.6, revised on 2026-11-12 after the EGM review
   (`docs/reviews/2026-11-11-spec-review-2/`). Spike done on 2026-11-13; WP5 builds case (c)
   (no consent, no flag); case (b) is F4. The app stores no consent; a flag goes to winget
-  for one operation after a user "Accept". The code is not built: the spike, the `consent`
-  option, the consent dialog, and the removal of the global config flag. SPEC §7, WP5, gives
-  the order. This work blocks the merge of PR #19 and the close of #6.
+  for one operation after a user "Accept". Case (c) is built on the branch (2026-11-13): the
+  config flag is removed, no builder passes an agreement flag, `agreements_required` carries
+  the dialog data, and the policy `script-src 'self'` is set. The `consent` option and the
+  consent dialog are not built; they are F4. SPEC §7, WP5, gives the order. The UI part
+  (step 3) blocks the close of #6.
 - **A3:** ✅ spec text fixed on 2026-11-11: document status note, §3 differences, §5.4 command
   table, §7 status table, WP3 cancel text.
-- **A4:** ✅ transition tables in SPEC §6.7 on 2026-11-11, as built. One WP5 gap blocks the close
-  of #6: a cancel that cannot stop the process tree is not reported to the UI.
+- **A4:** ✅ transition tables in SPEC §6.7 on 2026-11-11, as built. The WP5 gaps are fixed on
+  the branch (2026-11-13): a cancel that cannot stop the process tree emits one `cancel_failed`
+  event, and a cancelled uninstall goes to the rest state. The UI part (disable Cancel) is
+  step 3 and blocks the close of #6.
 - The repaired SPEC.md needs `/egm:egm-review docs/SPEC.md` before code starts on §6.6.
 - **A5:** headless mode needs a decision record before #11 starts.
 - **A6:** the msstore source is reached through winget only. Settle before #8 starts.
@@ -241,7 +245,7 @@ that never accepted the msstore source agreement.
 - Scope: the case (b) row of SPEC §6.6. The `consent` option on `start_install`, and on
   `start_uninstall` with the source kind only (spike question 3). A parser for the winget
   agreement block (label, text, URL). `agreement_url` and `agreement_text` in the error. The
-  consent dialog with the link. The tests tagged (a, b).
+  consent dialog with the link. `license_url` on `PackageDetail`. The tests tagged (a, b).
 - Fix `ProgressParser::agreements_shown()`: it matches the install notice that winget prints for
   every install, not an agreement (spike E7).
 - Needs: PR #19 merged, and the UI test level of `docs/designs/unattended-testing.md`.

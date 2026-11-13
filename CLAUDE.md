@@ -37,12 +37,14 @@ elevation). `tier:any` issues are reserved for community contributors on cheaper
   skeleton (PR #18).
 - Built, not merged: #6 (detail page, install/uninstall/cancel, log tail) on
   `impl/6--install-loop`, PR #19. Do not merge it before the spike and the core work of WP5 are
-  done (SPEC §7, WP5, steps 1 and 2). The UI work (step 3) is a second pull request; it waits
+  done (SPEC §7, WP5, steps 1 and 2; both are done). The UI work (step 3) is a second pull request; it waits
   for the approved `docs/designs/unattended-testing.md`. Maintainer decisions of 2026-11-12:
   this split, the license-link fallback of SPEC §6.6, and the minimum versions in SPEC §2.
   Spike of SPEC §6.6 done on 2026-11-13 (`docs/spikes/2026-11-13-agreement-consent.md`): WP5
   builds case (c) (no consent option, never an agreement flag); case (b) is later work, F4 in
-  `docs/ISSUE-BACKLOG.md`. Next for PR #19: WP5 step 2, the core work.
+  `docs/ISSUE-BACKLOG.md`. WP5 step 2, the core work, is done on the branch (2026-11-13). Next
+  for PR #19: the maintainer's push and merge decision. Then step 3 (a second pull request)
+  and F4.
 - `docs/SPEC.md` was repaired and reviewed with EGM on 2026-11-11 and 2026-11-12. The reports
   are in `docs/reviews/2026-11-11-spec-review-2/`. A section marked *built* or *built on
   branch* follows the code; a *planned* section overrides it. Where a built section and the
@@ -83,7 +85,7 @@ elevation). `tier:any` issues are reserved for community contributors on cheaper
 
 ## Layout (as built)
 - `src-tauri/src/error.rs` — `AppError` (+ JSON `code/message/detail/retryable`), `AppResult`.
-- `src-tauri/src/config.rs` — `AppConfig` JSON file; `accept_source_agreements` defaults false.
+- `src-tauri/src/config.rs` — `AppConfig` JSON file (no agreement setting; Store passes no agreement flag).
 - `src-tauri/src/domain/{package,source,install,progress}.rs` — SPEC §4 types; `string_enum!`
   macro in `domain/mod.rs` gives Display/FromStr/serde for every enum.
 - `src-tauri/src/db/{mod,models}.rs`, `db/repo/*.rs`, `db/migrations/*.sql` — pool, row
@@ -92,7 +94,7 @@ elevation). `tier:any` issues are reserved for community contributors on cheaper
 - `src-tauri/src/catalog/{mod,search}.rs`, `sources/winget_repo.rs` — `CatalogSource` trait,
   search coordinator with TTL cache (`detail_fetched_at`), winget.run v2 adapter (reqwest, httpmock tests).
 - `src-tauri/src/executor/{mod,winget_cli,winget_parse}.rs`, `tests/fixtures/fake_winget.rs` —
-  `PackageExecutor` trait, winget subprocess wrapper, progress parser; the fake is a cargo example.
+  `PackageExecutor` trait, winget subprocess wrapper (the stop function is a field, `StopFn`, for tests), progress parser; the fake is a cargo example.
 - `src-tauri/src/ipc/{commands,events,state}.rs` — Tauri commands (`search_sources`, `get_app_detail`, `start_install`, `cancel_install`, `check_updates`, `update_all`, `open_store_page`, `start_server` stub), `store:*` events, lazy `AppState`/`Core`; handlers are plain async fns tested in `ipc/tests.rs`.
 - `ui/src/{lib,components,routes}` — typed API client + event subscriptions, `Search.svelte` (debounced), `AppCard`, `InstallButton`, `ProgressBar`, `SourceBadge`.
 

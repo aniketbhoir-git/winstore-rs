@@ -16,11 +16,11 @@ Contract: SPEC §5.2, §6.2, §6.3, §8.
 | Rule | Detail |
 |---|---|
 | User click starts every mutating op | install, remove, update, pin. Never from a timer or a catalog refresh (SPEC §0 rule 4). |
-| Surface agreements, never pre-accept | Pass `--accept-source-agreements` / `--accept-package-agreements` ONLY when `AppConfig.accept_source_agreements` is true. Otherwise omit them; if winget exits with an agreements code, hand it to the UI as a prompt. |
+| Surface agreements, never pre-accept | Store passes no agreement flag in any command (WP5, case (c) of SPEC §6.6). When winget exits with an agreements code, the operation ends with `agreements_required`. |
 | One op per package id | Acquire `OpGuard` (per-package mutex map, SPEC §1.2) before spawning. |
 | Log every op | Write `operation_log` rows (start, each warn/error line, final exit status). Raw stderr goes in `detail`. |
 | Never use `--force` or `--ignore-security-hash` | No code path, no config switch. |
-| No real winget in unit tests or CI | Use the fake fixture. Real winget only in the manual smoke test. |
+| No real winget in unit tests | Use the fake fixture. Real winget runs only in CI or Windows Sandbox (SPEC §8), never on a developer machine. |
 
 ## Fixed facts
 
@@ -31,8 +31,8 @@ Contract: SPEC §5.2, §6.2, §6.3, §8.
 | Minimum version | Require >= 1.6.0 (project choice, not from docs: all flags below exist well before it). Lower -> `AppError::Unsupported("winget >= 1.6 required")`. Raise only on evidence. |
 | Sources here | `msstore` (storeedgefd.dsx.mp.microsoft.com/v9.0), `winget` (cdn.winget.microsoft.com/cache), `winget-font` (explicit). Always pass `--source` explicitly. |
 | `--disable-interactivity` | Always pass. A prompt that would appear becomes an error exit instead of blocking on stdin; reduces spinner redraws. |
-| `--accept-source-agreements` | Accepts source terms. Valid on install, upgrade, uninstall, list, show, export. |
-| `--accept-package-agreements` | Accepts package license text. Valid on install and upgrade only. |
+| `--accept-source-agreements` | Accepts source terms. Valid on install, upgrade, uninstall, list, show, export. Store passes it in no command. |
+| `--accept-package-agreements` | Accepts package license text. Valid on install and upgrade only; uninstall exits 0x8A150002 (spike: uninstall takes only the source flag). Store passes it in no command. |
 | `--scope user\|machine` | install: choose scope. uninstall/upgrade/list: filter on installed scope. `machine` needs elevation. |
 | `--silent` (`-h`) | Silent installer. Pass for install/upgrade/uninstall (SPEC §6.2). Excludes `--interactive`. |
 | `--exact` (`-e`) | Always pass with `--id` so `Foo.Bar` never matches `Foo.BarBaz`. |
@@ -49,16 +49,16 @@ Contract: SPEC §5.2, §6.2, §6.3, §8.
 
 ```text
 install:   winget install --id ID --exact --source S [--version V] [--scope user|machine]
-             --silent --disable-interactivity --verbose-logs [accept flags]
-uninstall: winget uninstall --id ID --exact [--source S] [--scope ..] --silent --disable-interactivity
-update:    winget upgrade --id ID --exact --source S --silent --disable-interactivity --verbose-logs [accept flags]
-installed: winget list --disable-interactivity [--source S]
+             --silent --disable-interactivity --verbose-logs
+uninstall: winget uninstall --id ID --exact --source S --silent --disable-interactivity
+update:    winget upgrade --id ID --exact --source S --silent --disable-interactivity --verbose-logs
+installed: winget list --disable-interactivity
 updates:   winget upgrade --include-unknown --disable-interactivity
            (equivalent: winget list --upgrade-available --include-unknown)
-pin:       winget pin add --id ID --exact | winget pin remove --id ID --exact | winget pin list
+pin:       winget pin add --id ID --exact | winget pin remove --id ID --exact
 ```
 
-"accept flags" are added only when config `accept_source_agreements` is true.
+No command line has an agreement flag.
 
 ## Output parsing
 
@@ -119,7 +119,7 @@ Full table with verified/inferred marks: `references/winget-cli.md`. Exit codes 
 | 0x8A150011 | INSTALLER_HASH_MISMATCH | `WingetFailed` (security; never offer an override) |
 | 0x8A15002B | UPDATE_NOT_APPLICABLE | Done, no-op |
 | 0x8A150019 | COMMAND_REQUIRES_ADMIN | `ElevationRequired` |
-| 0x8A150041 / 0x8A150046 | PACKAGE / SOURCE_AGREEMENTS_NOT_ACCEPTED | agreement prompt for the UI; until it exists, `AgreementsRequired` |
+| 0x8A150041 / 0x8A150046 | PACKAGE / SOURCE_AGREEMENTS_NOT_ACCEPTED | `AgreementsRequired` with `source_agreements`, `package_agreements`, `winget_source`, `version`, `agreement_text`, `agreement_url`. The terminal stage is `failed`, the `operation_log` row is Info, the ledger goes to the rest state (SPEC §6.7). `agreement_text` and `agreement_url` are null until F4 |
 | 0x8A150005, 0x8A15006A, 0x8A15010C | CTRL_SIGNAL, APPTERMINATION, INSTALL_CANCELLED_BY_USER | `Cancelled` |
 | 740 (Win32 installer code) | ERROR_ELEVATION_REQUIRED | `ElevationRequired` (INFERRED) |
 | anything else | - | `WingetFailed{code, stderr}` |
@@ -134,8 +134,7 @@ Decision of 2026-11-13: WP5 builds case (c) of SPEC §6.6. The app passes no agr
 any operation; case (b) (consent with the link) is later work, F4 in `docs/ISSUE-BACKLOG.md`.
 
 Answers to the spike questions of SPEC §6.6. Evidence, commands and source lines:
-`docs/spikes/2026-11-13-agreement-consent.md`. winget v1.29.380. SPEC §6.6 overrides the hard
-rule and the flag rows above until WP5 updates them.
+`docs/spikes/2026-11-13-agreement-consent.md`. winget v1.29.380.
 
 1. **Agreement text.** It comes from the agreement data of the package manifest
    (`Agreements: [{AgreementLabel, Agreement, AgreementUrl}]`) or of the REST source
@@ -170,6 +169,10 @@ rule and the flag rows above until WP5 updates them.
 `ProgressEvent::new` clamps fraction to 0..=1 and maps NaN to 0.
 `InstallState` moves (domain/install.rs): NotInstalled -> Installing -> Installed | Failed | NotInstalled (cancel);
 Installed -> Uninstalling -> NotInstalled | Failed. Use `InstallState::transition`; invalid moves return `Unsupported`.
+The end of an operation follows the end table of SPEC §6.7. A cancel and an agreements stop
+(`agreements_required`) put the ledger in the rest state (SPEC §0): `Installed` when a version
+is recorded (`Pinned` when the pin flag is set), `NotInstalled` when no version is recorded. An
+earlier `Failed` is not kept. A cancelled uninstall also goes to the rest state.
 
 ## Cancellation
 
@@ -179,21 +182,22 @@ winget has no cancel API. Cancel means: kill the process tree, then record Cance
 2. `cancel(operation_id)` trips a cancel token; the read loop `select!`s token vs. child exit.
 3. On cancel: terminate tree, `wait()` the child, emit one terminal `Cancelled` event, log it, return `AppError::Cancelled`.
 4. If the child already exited 0 first, report Done.
-5. Do not delete partial installer files; just report. Issue #6 resets `InstallState` to the prior state.
+5. Do not delete partial installer files; just report. Issue #6 puts `InstallState` in the rest state (SPEC §6.7); a cancelled uninstall too.
 6. An elevated child cannot be killed from a non-elevated parent (access denied): log it, do not claim Cancelled.
+7. The function that stops the tree is a field of the executor (`StopFn`, set with `WingetCli::with_stop_fn`; the default is the real `kill_tree`). When the tree is still alive after the stop, the executor keeps the Warn row and emits one `store:progress` event: stage unchanged, `cancel_failed = true`, message `cancel failed: the installer continues`. The send waits 2 s at most for room and never uses the slot of the terminal event; after 2 s it writes a Warn row. A second cancel does nothing. The UI part (disable Cancel) is WP5 step 3.
 
 ## Test strategy
 
 - Fixture: `src-tauri/tests/fixtures/fake_winget.rs` (a dev-only cargo example, built by the tests; see its header for the script format).
 - `STORE_WINGET_PATH` points the executor at the fake. Set it per test (temp dir), never process-global.
-- Cover: each stage line, bar progress, table parse (reuse OBSERVED tables from the reference), every exit-code row above, cancel mid-download, agreements flags absent unless config true (assert argv), `--force` / `--ignore-security-hash` never in argv, `\r` spinner noise, invalid UTF-8 bytes, winget missing -> `WingetNotFound`.
-- CI never runs real winget. Manual smoke (Issue #4 acceptance): install and remove one small package on Windows; paste the real output into the reference.
+- Cover: each stage line, bar progress, table parse (reuse OBSERVED tables from the reference), every exit-code row above, cancel mid-download, cancel that cannot stop the tree (inject a stop function that reports a live tree with `WingetCli::with_stop_fn`; assert one `cancel_failed` event), no agreement flag in any argv (`install_passes_no_agreement_flag_in_any_case`, `no_command_passes_an_agreement_flag`), `--force` / `--ignore-security-hash` never in argv, `\r` spinner noise, invalid UTF-8 bytes, winget missing -> `WingetNotFound`.
+- Real winget runs only in CI or Windows Sandbox (SPEC §8), never on a developer machine. Smoke (Issue #4 acceptance): install and remove one small package there; paste the real output into the reference. The smoke test passes no agreement flag.
 - Gate: `cargo build`, `cargo test`, `cargo clippy --all-targets -- -D warnings`, `cargo fmt` (PATH note in CLAUDE.md).
 
 ## Install loop (Issue #6) glue
 
 1. IPC `start_install`: create op id, take `OpGuard`, persist `InstallState::Installing`, emit Queued.
 2. Relay each `ProgressEvent` to the frontend and the log tail; persist stage changes.
-3. Exit 0 -> `Installed` and store the version (`winget list --id ID --exact`). Error -> `Failed`. Cancel -> prior state.
+3. Exit 0 -> `Installed` and store the version (`winget list --id ID --exact`). Follow the end table of SPEC §6.7: a failure with a version before keeps `Installed`, a failed install with no version gives `Failed`, a cancel and an agreements stop go to the rest state.
 4. Release the guard on every path (drop guard).
 5. `is_paid` packages have no in-app install path; only the browser hand-off.
