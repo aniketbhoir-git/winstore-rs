@@ -10,7 +10,7 @@ use store_lib::domain::{
     LogLevel, Operation, OperationStage, PackageId, ProgressEvent, SourceKind,
 };
 use store_lib::error::{AppError, AppResult};
-use store_lib::executor::winget_cli::{WingetCli, WingetOptions};
+use store_lib::executor::winget_cli::{ProcessJob, StopFuture, WingetCli, WingetOptions};
 use store_lib::executor::{InstallRequest, InstallScope, OperationHandle, PackageExecutor};
 
 struct Fx {
@@ -20,16 +20,11 @@ struct Fx {
 
 impl Fx {
     fn new(script: &str) -> Fx {
-        Self::build(script, false, &[], None)
-    }
-
-    fn accepting(script: &str) -> Fx {
-        Self::build(script, true, &[], None)
+        Self::build(script, &[], None)
     }
 
     fn build(
         script: &str,
-        accept: bool,
         extra_env: &[(&str, &str)],
         log_pool: Option<store_lib::db::DbPool>,
     ) -> Fx {
@@ -55,14 +50,7 @@ impl Fx {
                 .iter()
                 .map(|(k, v)| (k.to_string(), v.to_string())),
         );
-        let cli = WingetCli::new(
-            fake_exe(),
-            WingetOptions {
-                accept_agreements: accept,
-                log_pool,
-                env,
-            },
-        );
+        let cli = WingetCli::new(fake_exe(), WingetOptions { log_pool, env });
         Fx { dir, cli }
     }
 
@@ -168,32 +156,24 @@ async fn install_streams_every_stage_and_finishes_once() {
 }
 
 #[tokio::test]
-async fn agreements_flags_follow_config() {
-    for accept in [false, true] {
-        let fx = Fx::build("exit 0\n", accept, &[], None);
-        let req = InstallRequest {
-            version: Some("2.0".into()),
-            scope: Some(InstallScope::Machine),
-        };
-        let (_, outcome) = collect(fx.cli.install(&pkg("A.B"), &req).await.unwrap()).await;
-        outcome.unwrap();
-        let argv = fx.last_argv();
-        assert_eq!(
-            argv.contains(&"--accept-source-agreements".to_string()),
-            accept
-        );
-        assert_eq!(
-            argv.contains(&"--accept-package-agreements".to_string()),
-            accept
-        );
-        assert!(argv.windows(2).any(|w| w == ["--scope", "machine"]));
-        assert!(argv.windows(2).any(|w| w == ["--version", "2.0"]));
-    }
+async fn install_passes_no_agreement_flag_in_any_case() {
+    let fx = Fx::new("exit 0\n");
+    let req = InstallRequest {
+        version: Some("2.0".into()),
+        scope: Some(InstallScope::Machine),
+    };
+    let (_, outcome) = collect(fx.cli.install(&pkg("A.B"), &req).await.unwrap()).await;
+    outcome.unwrap();
+    let argv = fx.last_argv();
+    assert!(!argv.contains(&"--accept-source-agreements".to_string()));
+    assert!(!argv.contains(&"--accept-package-agreements".to_string()));
+    assert!(argv.windows(2).any(|w| w == ["--scope", "machine"]));
+    assert!(argv.windows(2).any(|w| w == ["--version", "2.0"]));
 }
 
 #[tokio::test]
 async fn forbidden_flags_never_reach_any_command() {
-    let fx = Fx::accepting("exit 0\n");
+    let fx = Fx::new("exit 0\n");
     let id = pkg("A.B");
     let (_, o) = collect(
         fx.cli
@@ -348,7 +328,8 @@ async fn exit_code_rows_map_to_errors_and_terminal_events() {
                 r,
                 Err(AppError::AgreementsRequired {
                     source_agreements: false,
-                    package_agreements: true
+                    package_agreements: true,
+                    ..
                 })
             )
         }),
@@ -357,7 +338,8 @@ async fn exit_code_rows_map_to_errors_and_terminal_events() {
                 r,
                 Err(AppError::AgreementsRequired {
                     source_agreements: true,
-                    package_agreements: false
+                    package_agreements: false,
+                    ..
                 })
             )
         }),
@@ -542,18 +524,18 @@ async fn winget_missing_is_winget_not_found() {
 #[tokio::test]
 async fn version_probe_enforces_floor() {
     let env = |v: &'static str| vec![("FAKE_WINGET_VERSION", v)];
-    let ok = Fx::build("", false, &env("v1.29.380"), None);
+    let ok = Fx::build("", &env("v1.29.380"), None);
     let v = ok.cli.probe().await.unwrap();
     assert_eq!((v.major, v.minor), (1, 29));
     assert!(ok.cli.is_available().await);
 
-    let old = Fx::build("", false, &env("v1.5.1881"), None);
+    let old = Fx::build("", &env("v1.5.1881"), None);
     let err = old.cli.probe().await.unwrap_err();
     assert_eq!(err.code(), "unsupported");
     assert!(err.to_string().contains("1.6"));
     assert!(!old.cli.is_available().await);
 
-    let junk = Fx::build("", false, &env("hello"), None);
+    let junk = Fx::build("", &env("hello"), None);
     assert_eq!(junk.cli.probe().await.unwrap_err().code(), "unsupported");
 }
 
@@ -596,7 +578,7 @@ out Some Local App        ARP\\Machine\\X64\\Local    1.0
 out 2 upgrades available.
 exit 0
 ";
-    let fx = Fx::accepting(script);
+    let fx = Fx::new(script);
     let ups = fx.cli.list_updates().await.unwrap();
     assert_eq!(ups.len(), 2);
     assert_eq!(ups[0].package_id, pkg("7zip.7zip"));
@@ -608,12 +590,7 @@ exit 0
     assert!(!ups[0].is_auto);
     assert_eq!(
         fx.last_argv(),
-        [
-            "upgrade",
-            "--include-unknown",
-            "--disable-interactivity",
-            "--accept-source-agreements"
-        ]
+        ["upgrade", "--include-unknown", "--disable-interactivity"]
     );
 }
 
@@ -625,7 +602,8 @@ async fn list_surfaces_agreement_prompt() {
         err,
         AppError::AgreementsRequired {
             source_agreements: true,
-            package_agreements: false
+            package_agreements: false,
+            ..
         }
     ));
     assert_eq!(err.code(), "agreements_required");
@@ -674,7 +652,6 @@ async fn operations_are_written_to_operation_log() {
     store_lib::db::run_migrations(&pool).await.unwrap();
     let fx = Fx::build(
         "out Installer failed with exit code: 1603\nerr boom\nexit 0x8A150115\n",
-        false,
         &[],
         Some(pool.clone()),
     );
@@ -751,32 +728,156 @@ async fn cancel_racing_a_clean_exit_never_contradicts_itself() {
 }
 
 #[tokio::test]
-async fn agreement_flags_on_update_remove_list_and_pin() {
-    let src = "--accept-source-agreements".to_string();
-    let pkg_flag = "--accept-package-agreements".to_string();
-    for accept in [false, true] {
-        let fx = Fx::build("exit 0\n", accept, &[], None);
-        let id = pkg("A.B");
-        collect(fx.cli.update(&id).await.unwrap()).await.1.unwrap();
-        let up = fx.last_argv();
-        collect(fx.cli.remove(&id).await.unwrap()).await.1.unwrap();
-        let rm = fx.last_argv();
-        fx.cli.list_installed().await.unwrap();
-        let li = fx.last_argv();
-        fx.cli.list_updates().await.unwrap();
-        let lu = fx.last_argv();
-        fx.cli.pin(&id).await.unwrap();
-        let pin = fx.last_argv();
-        fx.cli.unpin(&id).await.unwrap();
-        let unpin = fx.last_argv();
+async fn no_command_passes_an_agreement_flag() {
+    let fx = Fx::new("exit 0\n");
+    let id = pkg("A.B");
+    collect(
+        fx.cli
+            .install(&id, &InstallRequest::default())
+            .await
+            .unwrap(),
+    )
+    .await
+    .1
+    .unwrap();
+    collect(fx.cli.remove(&id).await.unwrap()).await.1.unwrap();
+    collect(fx.cli.update(&id).await.unwrap()).await.1.unwrap();
+    fx.cli.list_installed().await.unwrap();
+    fx.cli.list_updates().await.unwrap();
+    fx.cli.pin(&id).await.unwrap();
+    fx.cli.unpin(&id).await.unwrap();
+    let all = fx.invocations();
+    assert_eq!(all.len(), 7);
+    assert_eq!(all[5][..2], ["pin", "add"]);
+    assert_eq!(all[6][..2], ["pin", "remove"]);
+    for argv in all {
+        assert!(!argv.iter().any(|a| a.starts_with("--accept-")), "{argv:?}");
+    }
+}
 
-        for argv in [&up, &rm, &li, &lu, &pin, &unpin] {
-            assert_eq!(argv.contains(&src), accept, "{argv:?}");
-        }
-        // the package-agreements flag exists only on update (and install)
-        assert_eq!(up.contains(&pkg_flag), accept);
-        for argv in [&rm, &li, &lu, &pin, &unpin] {
-            assert!(!argv.contains(&pkg_flag), "{argv:?}");
+#[tokio::test]
+async fn agreements_required_carries_dialog_data_and_logs_info() {
+    for (code, source_kind, package_kind) in
+        [("0x8A150041", false, true), ("0x8A150046", true, false)]
+    {
+        for version in [Some("2.0"), None] {
+            let pool = store_lib::db::init_memory_pool().await.unwrap();
+            store_lib::db::run_migrations(&pool).await.unwrap();
+            let fx = Fx::build(&format!("exit {code}\n"), &[], Some(pool.clone()));
+            let id = pkg("Vendor.App");
+            let req = InstallRequest {
+                version: version.map(str::to_string),
+                scope: None,
+            };
+            let (events, outcome) = collect(fx.cli.install(&id, &req).await.unwrap()).await;
+            assert_one_terminal_last(&events);
+            assert_eq!(events.last().unwrap().stage, OperationStage::Failed);
+            match outcome {
+                Err(AppError::AgreementsRequired {
+                    source_agreements,
+                    package_agreements,
+                    winget_source,
+                    version: got,
+                    agreement_text,
+                    agreement_url,
+                }) => {
+                    assert_eq!(source_agreements, source_kind, "{code}");
+                    assert_eq!(package_agreements, package_kind, "{code}");
+                    assert_eq!(winget_source.as_deref(), Some("winget"));
+                    assert_eq!(got.as_deref(), version);
+                    assert!(agreement_text.is_none() && agreement_url.is_none());
+                }
+                other => panic!("{other:?}"),
+            }
+            let rows = store_lib::db::repo::operation_log::for_package(&pool, &id, 50)
+                .await
+                .unwrap();
+            assert!(rows.iter().all(|r| r.level != LogLevel::Error), "{rows:#?}");
+            assert!(
+                rows.iter()
+                    .any(|r| r.level == LogLevel::Info && r.message.contains("stopped")),
+                "{rows:#?}"
+            );
         }
     }
+}
+
+#[tokio::test]
+async fn agreements_required_on_remove_and_update_has_source_and_no_version() {
+    let fx = Fx::new("exit 0x8A150041\n");
+    let id = pkg("A.B");
+    for op in [Operation::Remove, Operation::Update] {
+        let h = match op {
+            Operation::Remove => fx.cli.remove(&id).await.unwrap(),
+            _ => fx.cli.update(&id).await.unwrap(),
+        };
+        match collect(h).await.1 {
+            Err(AppError::AgreementsRequired {
+                winget_source,
+                version,
+                ..
+            }) => {
+                assert_eq!(winget_source.as_deref(), Some("winget"));
+                assert!(version.is_none());
+            }
+            other => panic!("{other:?}"),
+        }
+    }
+}
+
+fn live_tree<'a>(
+    _child: &'a mut tokio::process::Child,
+    _job: Option<&'a ProcessJob>,
+) -> StopFuture<'a> {
+    Box::pin(async { false })
+}
+
+#[tokio::test]
+async fn cancel_that_cannot_stop_the_tree_emits_one_cancel_failed_event() {
+    let mut fx = Fx::new(
+        "sleep 1500
+exit 0
+",
+    );
+    fx.cli = fx.cli.with_stop_fn(live_tree);
+    let cli = fx.cli.clone();
+    let mut h = cli
+        .install(&pkg("A.B"), &InstallRequest::default())
+        .await
+        .unwrap();
+    cli.cancel(&h.operation_id).await.unwrap();
+    let mut events = Vec::new();
+    loop {
+        let e = tokio::time::timeout(Duration::from_secs(20), h.events.recv())
+            .await
+            .expect("no cancel_failed event")
+            .expect("stream closed early");
+        let failed = e.cancel_failed;
+        events.push(e);
+        if failed {
+            break;
+        }
+    }
+    // a second cancel for the same operation does nothing
+    cli.cancel(&h.operation_id).await.unwrap();
+    tokio::time::timeout(Duration::from_secs(30), async {
+        while let Some(e) = h.events.recv().await {
+            events.push(e);
+        }
+    })
+    .await
+    .expect("stream did not close");
+    let outcome = h.outcome.await.unwrap();
+    outcome.expect("the real outcome stands: exit 0");
+
+    let flagged: Vec<_> = events.iter().filter(|e| e.cancel_failed).collect();
+    assert_eq!(flagged.len(), 1, "{events:#?}");
+    assert_eq!(flagged[0].message, "cancel failed: the installer continues");
+    let idx = events.iter().position(|e| e.cancel_failed).unwrap();
+    assert!(idx > 0);
+    assert_eq!(flagged[0].stage, events[idx - 1].stage, "stage unchanged");
+    assert!(!flagged[0].stage.is_terminal());
+    assert_one_terminal_last(&events);
+    assert_eq!(events.last().unwrap().stage, OperationStage::Done);
+    assert!(!events.last().unwrap().cancel_failed);
 }

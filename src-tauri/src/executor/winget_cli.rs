@@ -39,6 +39,9 @@ const PROBE_TIMEOUT: Duration = Duration::from_secs(15);
 const DRAIN_TIMEOUT: Duration = Duration::from_secs(2);
 const STDERR_CAP: usize = 16 * 1024;
 const EVENT_CHANNEL: usize = 256;
+const CANCEL_FAILED_WAIT: Duration = Duration::from_secs(2);
+/// Message of the "cancel failed" event. The UI keys on `cancel_failed`, not on this text.
+pub const CANCEL_FAILED_MESSAGE: &str = "cancel failed: the installer continues";
 
 // ---------------------------------------------------------------------------------------------
 // Discovery
@@ -146,12 +149,9 @@ pub fn winget_target(package: &PackageId) -> AppResult<(String, &'static str)> {
     Ok((id, source))
 }
 
-pub fn install_args(
-    id: &str,
-    source: &str,
-    req: &InstallRequest,
-    accept_agreements: bool,
-) -> Vec<String> {
+/// No builder passes an agreement flag in any case (SPEC §6.6 case (c), hard rule 4): when
+/// winget needs an agreement it exits 0x8A150041 / 0x8A150046 and the operation fails.
+pub fn install_args(id: &str, source: &str, req: &InstallRequest) -> Vec<String> {
     let mut a = s(&["install", "--id", id, "--exact", "--source", source]);
     if let Some(v) = &req.version {
         a.extend(s(&["--version", v]));
@@ -164,69 +164,41 @@ pub fn install_args(
         "--disable-interactivity",
         "--verbose-logs",
     ]));
-    if accept_agreements {
-        a.extend(s(&[
-            "--accept-source-agreements",
-            "--accept-package-agreements",
-        ]));
-    }
     a
 }
 
-pub fn update_args(id: &str, source: &str, accept_agreements: bool) -> Vec<String> {
+pub fn update_args(id: &str, source: &str) -> Vec<String> {
     let mut a = s(&["upgrade", "--id", id, "--exact", "--source", source]);
     a.extend(s(&[
         "--silent",
         "--disable-interactivity",
         "--verbose-logs",
     ]));
-    if accept_agreements {
-        a.extend(s(&[
-            "--accept-source-agreements",
-            "--accept-package-agreements",
-        ]));
-    }
     a
 }
 
-pub fn remove_args(id: &str, source: &str, accept_agreements: bool) -> Vec<String> {
+pub fn remove_args(id: &str, source: &str) -> Vec<String> {
     let mut a = s(&["uninstall", "--id", id, "--exact", "--source", source]);
     a.extend(s(&["--silent", "--disable-interactivity"]));
-    if accept_agreements {
-        a.push("--accept-source-agreements".into());
-    }
     a
 }
 
-pub fn list_installed_args(accept_agreements: bool) -> Vec<String> {
-    let mut a = s(&["list", "--disable-interactivity"]);
-    if accept_agreements {
-        a.push("--accept-source-agreements".into());
-    }
-    a
+pub fn list_installed_args() -> Vec<String> {
+    s(&["list", "--disable-interactivity"])
 }
 
-pub fn list_updates_args(accept_agreements: bool) -> Vec<String> {
-    let mut a = s(&["upgrade", "--include-unknown", "--disable-interactivity"]);
-    if accept_agreements {
-        a.push("--accept-source-agreements".into());
-    }
-    a
+pub fn list_updates_args() -> Vec<String> {
+    s(&["upgrade", "--include-unknown", "--disable-interactivity"])
 }
 
-pub fn pin_args(id: &str, add: bool, accept_agreements: bool) -> Vec<String> {
-    let mut a = s(&[
+pub fn pin_args(id: &str, add: bool) -> Vec<String> {
+    s(&[
         "pin",
         if add { "add" } else { "remove" },
         "--id",
         id,
         "--exact",
-    ]);
-    if accept_agreements {
-        // Supported by `pin add` and `pin remove` (checked with --help on winget 1.29).
-        a.push("--accept-source-agreements".into());
-    }
-    a
+    ])
 }
 
 /// Last line of defence: no code path may hand these flags to winget.
@@ -343,7 +315,7 @@ mod job {
     }
 }
 
-use job::ProcessJob;
+pub use job::ProcessJob;
 
 /// True when the process tree is known to be gone: the Job Object or `taskkill /T /F` worked.
 /// A bare `start_kill` (direct child only) does not count: an elevated installer would keep
@@ -380,6 +352,15 @@ async fn kill_tree(child: &mut Child, job: Option<&ProcessJob>) -> bool {
     false
 }
 
+/// The function that stops the process tree: a field of the executor so tests can swap it
+/// (`WingetCli::with_stop_fn`). The default is `kill_tree`.
+pub type StopFuture<'a> = std::pin::Pin<Box<dyn std::future::Future<Output = bool> + Send + 'a>>;
+pub type StopFn = for<'a> fn(&'a mut Child, Option<&'a ProcessJob>) -> StopFuture<'a>;
+
+fn default_stop<'a>(child: &'a mut Child, job: Option<&'a ProcessJob>) -> StopFuture<'a> {
+    Box::pin(kill_tree(child, job))
+}
+
 /// A cancel only counts if the child did not finish with exit 0 first ("Done wins").
 fn cancel_wins(status: &std::io::Result<std::process::ExitStatus>) -> bool {
     !matches!(status, Ok(st) if st.code() == Some(0))
@@ -391,8 +372,6 @@ fn cancel_wins(status: &std::io::Result<std::process::ExitStatus>) -> bool {
 
 #[derive(Debug, Clone, Default)]
 pub struct WingetOptions {
-    /// Mirrors `AppConfig.accept_source_agreements`. Default false: agreements are surfaced.
-    pub accept_agreements: bool,
     /// When set, operations write `operation_log` rows.
     pub log_pool: Option<DbPool>,
     /// Extra environment for each spawned child (used by tests; never process-global).
@@ -405,6 +384,7 @@ struct Inner {
     guard: OpGuard,
     cancels: Mutex<HashMap<String, Arc<Notify>>>,
     next_op: AtomicU64,
+    stop: StopFn,
 }
 
 #[derive(Clone)]
@@ -418,8 +398,14 @@ struct OpCtx {
     package: PackageId,
     winget_id: String,
     operation: Operation,
+    /// Name of the winget source on the command line (`winget`, `msstore`).
+    winget_source: String,
+    /// The `--version` the request gave, if any.
+    version: Option<String>,
     tx: mpsc::Sender<ProgressEvent>,
     notify: Arc<Notify>,
+    /// Stage and fraction of the last event that reached the channel.
+    last_sent: Mutex<(OperationStage, f32)>,
 }
 
 impl OpCtx {
@@ -438,9 +424,31 @@ impl OpCtx {
     /// lags. The last free slot is reserved for the terminal event, which is the only sender
     /// of the final slot, so exactly one terminal event always fits.
     fn progress(&self, stage: OperationStage, fraction: f32, msg: &str) {
-        if self.tx.capacity() > 1 {
-            let _ = self.tx.try_send(self.event(stage, fraction, msg));
+        if self.tx.capacity() > 1 && self.tx.try_send(self.event(stage, fraction, msg)).is_ok() {
+            *self.last_sent.lock().unwrap_or_else(|e| e.into_inner()) = (stage, fraction);
         }
+    }
+
+    /// Sends the one "cancel failed" event (SPEC §6.7): stage unchanged, waits at most
+    /// `CANCEL_FAILED_WAIT` for room, and never takes the slot kept for the terminal event.
+    /// Returns false when there was no room in time.
+    async fn cancel_failed(&self) -> bool {
+        let (stage, fraction) = *self.last_sent.lock().unwrap_or_else(|e| e.into_inner());
+        let mut ev = self.event(stage, fraction, CANCEL_FAILED_MESSAGE);
+        ev.cancel_failed = true;
+        let wait = async {
+            // Only this task sends, so a free slot stays free until we use it.
+            while self.tx.capacity() <= 1 && !self.tx.is_closed() {
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        };
+        if tokio::time::timeout(CANCEL_FAILED_WAIT, wait)
+            .await
+            .is_err()
+        {
+            return false;
+        }
+        self.tx.try_send(ev).is_ok()
     }
 
     async fn log(&self, level: LogLevel, message: &str, detail: Option<String>) {
@@ -493,8 +501,18 @@ impl WingetCli {
                 guard: OpGuard::default(),
                 cancels: Mutex::new(HashMap::new()),
                 next_op: AtomicU64::new(1),
+                stop: default_stop,
             }),
         }
+    }
+
+    /// Replaces the function that stops the process tree (test seam). Call it right after
+    /// construction, before the executor is cloned.
+    pub fn with_stop_fn(mut self, stop: StopFn) -> Self {
+        Arc::get_mut(&mut self.inner)
+            .expect("with_stop_fn must run before the executor is shared")
+            .stop = stop;
+        self
     }
 
     /// Discovers winget and checks the version floor.
@@ -574,6 +592,8 @@ impl WingetCli {
         package: &PackageId,
         operation: Operation,
         winget_id: String,
+        winget_source: &str,
+        version: Option<String>,
         args: Vec<String>,
     ) -> AppResult<OperationHandle> {
         guard_args(&args)?;
@@ -599,8 +619,11 @@ impl WingetCli {
             package: package.clone(),
             winget_id,
             operation,
+            winget_source: winget_source.to_string(),
+            version,
             tx,
             notify,
+            last_sent: Mutex::new((OperationStage::Queued, 0.0)),
         };
         ctx.progress(OperationStage::Queued, 0.0, "queued");
         ctx.progress(OperationStage::Resolving, 0.0, "starting winget");
@@ -613,7 +636,8 @@ impl WingetCli {
                 Some(args.join(" ")),
             )
             .await;
-            let result = drive(&ctx, &mut child, job.as_ref(), stdout, stderr).await;
+            let stop = ctx.inner.stop;
+            let result = drive(&ctx, &mut child, job.as_ref(), stop, stdout, stderr).await;
             if let Some(j) = &job {
                 j.disarm();
             }
@@ -632,20 +656,30 @@ impl WingetCli {
         request: &InstallRequest,
     ) -> AppResult<OperationHandle> {
         let (id, source) = winget_target(package)?;
-        let args = install_args(&id, source, request, self.inner.options.accept_agreements);
-        self.start_op(package, Operation::Install, id, args).await
+        let args = install_args(&id, source, request);
+        self.start_op(
+            package,
+            Operation::Install,
+            id,
+            source,
+            request.version.clone(),
+            args,
+        )
+        .await
     }
 
     pub async fn start_remove(&self, package: &PackageId) -> AppResult<OperationHandle> {
         let (id, source) = winget_target(package)?;
-        let args = remove_args(&id, source, self.inner.options.accept_agreements);
-        self.start_op(package, Operation::Remove, id, args).await
+        let args = remove_args(&id, source);
+        self.start_op(package, Operation::Remove, id, source, None, args)
+            .await
     }
 
     pub async fn start_update(&self, package: &PackageId) -> AppResult<OperationHandle> {
         let (id, source) = winget_target(package)?;
-        let args = update_args(&id, source, self.inner.options.accept_agreements);
-        self.start_op(package, Operation::Update, id, args).await
+        let args = update_args(&id, source);
+        self.start_op(package, Operation::Update, id, source, None, args)
+            .await
     }
 
     pub fn request_cancel(&self, operation_id: &str) {
@@ -662,7 +696,7 @@ impl WingetCli {
     }
 
     pub async fn query_installed(&self) -> AppResult<Vec<InstalledPackage>> {
-        let args = list_installed_args(self.inner.options.accept_agreements);
+        let args = list_installed_args();
         let out = self.run_capture(&args).await?;
         if out.code as u32 == EXIT_NO_APPLICATIONS_FOUND {
             return Ok(Vec::new());
@@ -686,7 +720,7 @@ impl WingetCli {
     }
 
     pub async fn query_updates(&self) -> AppResult<Vec<UpdateAvailable>> {
-        let args = list_updates_args(self.inner.options.accept_agreements);
+        let args = list_updates_args();
         let out = self.run_capture(&args).await?;
         let code = out.code as u32;
         if code == EXIT_NO_APPLICATIONS_FOUND || code == EXIT_UPDATE_NOT_APPLICABLE {
@@ -717,9 +751,7 @@ impl WingetCli {
     pub async fn set_pin(&self, package: &PackageId, add: bool) -> AppResult<()> {
         let (id, _) = winget_target(package)?;
         let _permit = self.inner.guard.try_acquire(package)?;
-        let out = self
-            .run_capture(&pin_args(&id, add, self.inner.options.accept_agreements))
-            .await?;
+        let out = self.run_capture(&pin_args(&id, add)).await?;
         out.require_ok(&id)
     }
 }
@@ -803,6 +835,7 @@ async fn drive<O, E>(
     ctx: &OpCtx,
     child: &mut Child,
     job: Option<&ProcessJob>,
+    stop: StopFn,
     mut stdout: Option<O>,
     stderr: Option<E>,
 ) -> Driven
@@ -835,7 +868,7 @@ where
                 if let Ok(Some(st)) = child.try_wait() {
                     break Ok(st);
                 }
-                if kill_tree(child, job).await {
+                if stop(child, job).await {
                     // winget may have exited 0 between try_wait and the kill: Done wins.
                     let st = child.wait().await;
                     cancelled = cancel_wins(&st);
@@ -847,6 +880,14 @@ where
                     None,
                 )
                 .await;
+                if !ctx.cancel_failed().await {
+                    ctx.log(
+                        LogLevel::Warn,
+                        "cancel failed, but the progress channel had no room to say so",
+                        None,
+                    )
+                    .await;
+                }
             }
             st = child.wait() => break st,
         }
@@ -915,10 +956,19 @@ where
 /// Sends the single terminal event, logs, releases the guard and reports the outcome.
 async fn finish(
     ctx: OpCtx,
-    driven: Driven,
+    mut driven: Driven,
     permit: OpPermit,
     outcome: oneshot::Sender<AppResult<()>>,
 ) {
+    if let Err(AppError::AgreementsRequired {
+        winget_source,
+        version,
+        ..
+    }) = &mut driven.result
+    {
+        *winget_source = Some(ctx.winget_source.clone());
+        *version = ctx.version.clone();
+    }
     let (stage, fraction, message) = match &driven.result {
         Ok(false) => (OperationStage::Done, 1.0, "done".to_string()),
         Ok(true) => (OperationStage::Done, 1.0, "already up to date".to_string()),
@@ -938,6 +988,22 @@ async fn finish(
             ctx.log(
                 LogLevel::Info,
                 &format!("{} cancelled", ctx.operation),
+                None,
+            )
+            .await
+        }
+        // Not a program fault: winget asks the user for an agreement (SPEC §6.7).
+        Err(AppError::AgreementsRequired {
+            source_agreements, ..
+        }) => {
+            let kind = if *source_agreements {
+                "source"
+            } else {
+                "package"
+            };
+            ctx.log(
+                LogLevel::Info,
+                &format!("{} stopped: winget needs a {kind} agreement", ctx.operation),
                 None,
             )
             .await
@@ -1035,7 +1101,7 @@ mod tests {
             version: Some("1.2.3".into()),
             scope: Some(InstallScope::User),
         };
-        let a = install_args("Foo.Bar", "winget", &req, false);
+        let a = install_args("Foo.Bar", "winget", &req);
         assert_eq!(
             a,
             [
@@ -1058,47 +1124,33 @@ mod tests {
     }
 
     #[test]
-    fn agreement_flags_only_when_accepted() {
+    fn no_builder_passes_an_agreement_flag() {
         let req = InstallRequest::default();
-        let off = install_args("A.B", "winget", &req, false);
-        assert!(!has(&off, "--accept-source-agreements"));
-        assert!(!has(&off, "--accept-package-agreements"));
-        let on = install_args("A.B", "winget", &req, true);
-        assert!(has(&on, "--accept-source-agreements") && has(&on, "--accept-package-agreements"));
-
-        // uninstall / list accept only the source flag
-        assert!(!has(
-            &remove_args("A.B", "winget", false),
-            "--accept-source-agreements"
-        ));
-        let rm = remove_args("A.B", "winget", true);
-        assert!(has(&rm, "--accept-source-agreements") && !has(&rm, "--accept-package-agreements"));
-        let up = update_args("A.B", "winget", true);
-        assert!(has(&up, "--accept-package-agreements"));
-        assert!(!has(
-            &update_args("A.B", "winget", false),
-            "--accept-package-agreements"
-        ));
-        assert!(has(
-            &list_installed_args(true),
-            "--accept-source-agreements"
-        ));
-        assert!(!has(
-            &list_updates_args(false),
-            "--accept-source-agreements"
-        ));
+        let all = [
+            install_args("A.B", "winget", &req),
+            update_args("A.B", "winget"),
+            remove_args("A.B", "winget"),
+            list_installed_args(),
+            list_updates_args(),
+            pin_args("A.B", true),
+            pin_args("A.B", false),
+        ];
+        for a in &all {
+            assert!(!has(a, "--accept-source-agreements"), "{a:?}");
+            assert!(!has(a, "--accept-package-agreements"), "{a:?}");
+        }
     }
 
     #[test]
     fn every_builder_is_clean_and_exact() {
         let all = [
-            install_args("A.B", "msstore", &InstallRequest::default(), true),
-            update_args("A.B", "winget", true),
-            remove_args("A.B", "winget", true),
-            list_installed_args(true),
-            list_updates_args(true),
-            pin_args("A.B", true, true),
-            pin_args("A.B", false, true),
+            install_args("A.B", "msstore", &InstallRequest::default()),
+            update_args("A.B", "winget"),
+            remove_args("A.B", "winget"),
+            list_installed_args(),
+            list_updates_args(),
+            pin_args("A.B", true),
+            pin_args("A.B", false),
         ];
         for a in &all {
             never_forbidden(a);
@@ -1110,22 +1162,6 @@ mod tests {
         assert!(has(&all[3], "--disable-interactivity") && has(&all[4], "--include-unknown"));
         assert_eq!(all[5][..3], ["pin", "add", "--id"]);
         assert_eq!(all[6][1], "remove");
-    }
-
-    #[test]
-    fn pin_agreements_flag_only_when_accepted() {
-        assert!(!has(
-            &pin_args("A.B", true, false),
-            "--accept-source-agreements"
-        ));
-        assert!(has(
-            &pin_args("A.B", true, true),
-            "--accept-source-agreements"
-        ));
-        assert!(has(
-            &pin_args("A.B", false, true),
-            "--accept-source-agreements"
-        ));
     }
 
     #[test]

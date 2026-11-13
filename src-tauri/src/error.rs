@@ -36,6 +36,12 @@ pub enum AppError {
     AgreementsRequired {
         source_agreements: bool,
         package_agreements: bool,
+        /// Data for the consent dialog (SPEC §1.3); the executor fills `winget_source` and
+        /// `version`, the text and the link stay `None` in WP5.
+        winget_source: Option<String>,
+        version: Option<String>,
+        agreement_text: Option<String>,
+        agreement_url: Option<String>,
     },
 }
 
@@ -97,6 +103,28 @@ fn error_chain(e: &dyn std::error::Error) -> String {
 
 impl Serialize for AppError {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        if let AppError::AgreementsRequired {
+            source_agreements,
+            package_agreements,
+            winget_source,
+            version,
+            agreement_text,
+            agreement_url,
+        } = self
+        {
+            let mut st = serializer.serialize_struct("AppError", 10)?;
+            st.serialize_field("code", self.code())?;
+            st.serialize_field("message", &self.to_string())?;
+            st.serialize_field("detail", &self.detail())?;
+            st.serialize_field("retryable", &self.retryable())?;
+            st.serialize_field("source_agreements", source_agreements)?;
+            st.serialize_field("package_agreements", package_agreements)?;
+            st.serialize_field("winget_source", winget_source)?;
+            st.serialize_field("version", version)?;
+            st.serialize_field("agreement_text", agreement_text)?;
+            st.serialize_field("agreement_url", agreement_url)?;
+            return st.end();
+        }
         let mut st = serializer.serialize_struct("AppError", 4)?;
         st.serialize_field("code", self.code())?;
         st.serialize_field("message", &self.to_string())?;
@@ -147,6 +175,10 @@ mod tests {
                 AppError::AgreementsRequired {
                     source_agreements: true,
                     package_agreements: false,
+                    winget_source: None,
+                    version: None,
+                    agreement_text: None,
+                    agreement_url: None,
                 },
                 "agreements_required",
                 false,
@@ -162,6 +194,36 @@ mod tests {
             let v = serde_json::to_value(&err).unwrap();
             assert_eq!(v["code"], code);
             assert_eq!(v["retryable"], retry);
+        }
+    }
+
+    #[test]
+    fn agreements_required_json_carries_six_extra_fields() {
+        let err = AppError::AgreementsRequired {
+            source_agreements: false,
+            package_agreements: true,
+            winget_source: Some("winget".into()),
+            version: None,
+            agreement_text: None,
+            agreement_url: None,
+        };
+        let v = serde_json::to_value(&err).unwrap();
+        let o = v.as_object().unwrap();
+        assert_eq!(o.len(), 10);
+        assert_eq!(v["code"], "agreements_required");
+        assert_eq!(v["source_agreements"], false);
+        assert_eq!(v["package_agreements"], true);
+        assert_eq!(v["winget_source"], "winget");
+        for k in ["version", "agreement_text", "agreement_url", "detail"] {
+            assert!(o.get(k).is_some_and(|x| x.is_null()), "{k}");
+        }
+        assert_eq!(v["retryable"], false);
+        // every other variant keeps the four-field shape
+        for (err, _, _) in all() {
+            if err.code() != "agreements_required" {
+                let v = serde_json::to_value(&err).unwrap();
+                assert_eq!(v.as_object().unwrap().len(), 4, "{}", err.code());
+            }
         }
     }
 

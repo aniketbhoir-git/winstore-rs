@@ -179,7 +179,6 @@ impl Fx {
         let cli = WingetCli::new(
             common::fake_exe(),
             WingetOptions {
-                accept_agreements: false,
                 log_pool: Some(pool.clone()),
                 env: vec![(
                     "FAKE_WINGET_SCRIPT".to_string(),

@@ -54,6 +54,9 @@ pub struct ProgressEvent {
     pub fraction: f32,
     pub message: String,
     pub timestamp: i64,
+    /// True when a cancel could not stop the process tree (SPEC §6.7). The stage is unchanged.
+    #[serde(default)]
+    pub cancel_failed: bool,
 }
 
 impl ProgressEvent {
@@ -79,6 +82,7 @@ impl ProgressEvent {
             fraction,
             message: message.into(),
             timestamp: now_unix(),
+            cancel_failed: false,
         }
     }
 }

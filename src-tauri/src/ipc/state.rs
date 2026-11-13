@@ -136,7 +136,7 @@ async fn build_core(db_path: Option<&std::path::Path>) -> AppResult<Core> {
         Some(pool.clone()),
         config.cache_ttl_secs,
     );
-    let factory = winget_factory(pool.clone(), config.accept_source_agreements);
+    let factory = winget_factory(pool.clone());
     Ok(Core::new(pool, catalog, config, factory))
 }
 
@@ -163,12 +163,11 @@ async fn enabled_sources(
     Ok(out)
 }
 
-fn winget_factory(pool: DbPool, accept_agreements: bool) -> ExecutorFactory {
+fn winget_factory(pool: DbPool) -> ExecutorFactory {
     Arc::new(move || {
         let pool = pool.clone();
         Box::pin(async move {
             let options = WingetOptions {
-                accept_agreements,
                 log_pool: Some(pool),
                 env: Vec::new(),
             };

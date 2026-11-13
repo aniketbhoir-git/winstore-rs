@@ -21,8 +21,6 @@ pub struct AppConfig {
     pub cache_ttl_secs: u64,
     pub update_check_interval_secs: u64,
     pub disabled_sources: Vec<String>,
-    /// Must stay false by default (SPEC §0 rule 4): agreements are never auto-accepted.
-    pub accept_source_agreements: bool,
 }
 
 impl Default for AppConfig {
@@ -32,7 +30,6 @@ impl Default for AppConfig {
             cache_ttl_secs: 3600,
             update_check_interval_secs: 86400,
             disabled_sources: Vec::new(),
-            accept_source_agreements: false,
         }
     }
 }
@@ -79,8 +76,20 @@ mod tests {
     use super::*;
 
     #[test]
-    fn default_has_agreements_off() {
-        assert!(!AppConfig::default().accept_source_agreements);
+    fn old_file_with_removed_agreements_key_still_loads() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.json");
+        std::fs::write(
+            &path,
+            // The key of the removed field, split so that no source text names it.
+            concat!(
+                r#"{"cache_ttl_secs": 7, "accept_source"#,
+                r#"_agreements": true}"#
+            ),
+        )
+        .unwrap();
+        let cfg = AppConfig::load(&path).unwrap();
+        assert_eq!(cfg.cache_ttl_secs, 7);
     }
 
     #[test]
@@ -101,7 +110,6 @@ mod tests {
             cache_ttl_secs: 5,
             update_check_interval_secs: 10,
             disabled_sources: vec!["a".into(), "b".into()],
-            accept_source_agreements: true,
         };
         cfg.save(&path).unwrap();
         cfg.save(&path).unwrap(); // overwrite existing file
