@@ -127,8 +127,15 @@ fn no_window(cmd: &mut Command) {
 // Argv builders (pure)
 // ---------------------------------------------------------------------------------------------
 
-/// Flags winget must never receive from this app.
-pub const FORBIDDEN_FLAGS: [&str; 2] = ["--force", "--ignore-security-hash"];
+/// Flags winget must never receive from this app. The two agreement flags are here because
+/// WP5 builds case (c) of SPEC §6.6: no operation passes one. The consent work (backlog F4)
+/// replaces that part of the guard.
+pub const FORBIDDEN_FLAGS: [&str; 4] = [
+    "--force",
+    "--ignore-security-hash",
+    "--accept-source-agreements",
+    "--accept-package-agreements",
+];
 
 fn s(v: &[&str]) -> Vec<String> {
     v.iter().map(|x| x.to_string()).collect()
@@ -315,6 +322,8 @@ mod job {
     }
 }
 
+/// Public only so that a test can name the type in a `StopFn`.
+#[doc(hidden)]
 pub use job::ProcessJob;
 
 /// True when the process tree is known to be gone: the Job Object or `taskkill /T /F` worked.
@@ -431,7 +440,8 @@ impl OpCtx {
 
     /// Sends the one "cancel failed" event (SPEC §6.7): stage unchanged, waits at most
     /// `CANCEL_FAILED_WAIT` for room, and never takes the slot kept for the terminal event.
-    /// Returns false when there was no room in time.
+    /// Returns false when there was no room in time. A closed channel has no reader to tell,
+    /// so it counts as sent.
     async fn cancel_failed(&self) -> bool {
         let (stage, fraction) = *self.last_sent.lock().unwrap_or_else(|e| e.into_inner());
         let mut ev = self.event(stage, fraction, CANCEL_FAILED_MESSAGE);
@@ -448,7 +458,7 @@ impl OpCtx {
         {
             return false;
         }
-        self.tx.try_send(ev).is_ok()
+        self.tx.is_closed() || self.tx.try_send(ev).is_ok()
     }
 
     async fn log(&self, level: LogLevel, message: &str, detail: Option<String>) {
@@ -873,6 +883,10 @@ where
                     let st = child.wait().await;
                     cancelled = cancel_wins(&st);
                     break st;
+                }
+                // winget may have ended while the stop ran; then nothing "continues".
+                if let Ok(Some(st)) = child.try_wait() {
+                    break Ok(st);
                 }
                 ctx.log(
                     LogLevel::Warn,

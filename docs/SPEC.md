@@ -156,7 +156,8 @@ WP10 adds a mode for headless Windows Server machines; its design is not decided
   of §6.6:
   - `winget_source`: the name of the winget source that the operation used.
   - `version`: the version that the operation gave to winget. When it gave none, the latest
-    version of the cached detail. `null` only when the core has no version.
+    version of the cached detail. `null` only when the core has no version. *On the branch:*
+    an uninstall gives `null`, and `update_all` gives the latest version of its update scan.
   - `agreement_text`: the agreement text, or `null`. Spike question 1 (§6.6) finds its origin.
   - `agreement_url`: a link to the agreement, or `null`. For a package agreement it is the
     `license_url` of the package detail (§4.2). For a source agreement it is the URL that

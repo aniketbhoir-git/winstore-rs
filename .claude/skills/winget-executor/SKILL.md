@@ -19,7 +19,7 @@ Contract: SPEC §5.2, §6.2, §6.3, §8.
 | Surface agreements, never pre-accept | Store passes no agreement flag in any command (WP5, case (c) of SPEC §6.6). When winget exits with an agreements code, the operation ends with `agreements_required`. |
 | One op per package id | Acquire `OpGuard` (per-package mutex map, SPEC §1.2) before spawning. |
 | Log every op | Write `operation_log` rows (start, each warn/error line, final exit status). Raw stderr goes in `detail`. |
-| Never use `--force` or `--ignore-security-hash` | No code path, no config switch. |
+| Never use `--force` or `--ignore-security-hash` | No code path, no config switch. `guard_args` refuses them, and in WP5 also the two agreement flags (`FORBIDDEN_FLAGS`); F4 changes the agreement part. |
 | No real winget in unit tests | Use the fake fixture. Real winget runs only in CI or Windows Sandbox (SPEC §8), never on a developer machine. |
 
 ## Fixed facts
@@ -167,8 +167,8 @@ Answers to the spike questions of SPEC §6.6. Evidence, commands and source line
 `OperationStage`: Queued, Resolving, Downloading, Installing, Finalizing, Done, Failed, Cancelled
 (`is_terminal()` true for the last three). Emit `Queued` at op creation, `Resolving` after spawn.
 `ProgressEvent::new` clamps fraction to 0..=1 and maps NaN to 0.
-`InstallState` moves (domain/install.rs): NotInstalled -> Installing -> Installed | Failed | NotInstalled (cancel);
-Installed -> Uninstalling -> NotInstalled | Failed. Use `InstallState::transition`; invalid moves return `Unsupported`.
+`InstallState` moves (domain/install.rs): NotInstalled -> Installing -> Installed | Failed | NotInstalled (cancel, agreements stop);
+Installed -> Uninstalling -> NotInstalled | Failed | Installed or Pinned (cancel, agreements stop). Use `InstallState::transition`; invalid moves return `Unsupported`.
 The end of an operation follows the end table of SPEC §6.7. A cancel and an agreements stop
 (`agreements_required`) put the ledger in the rest state (SPEC §0): `Installed` when a version
 is recorded (`Pinned` when the pin flag is set), `NotInstalled` when no version is recorded. An
@@ -198,6 +198,6 @@ winget has no cancel API. Cancel means: kill the process tree, then record Cance
 
 1. IPC `start_install`: create op id, take `OpGuard`, persist `InstallState::Installing`, emit Queued.
 2. Relay each `ProgressEvent` to the frontend and the log tail; persist stage changes.
-3. Exit 0 -> `Installed` and store the version (`winget list --id ID --exact`). Follow the end table of SPEC §6.7: a failure with a version before keeps `Installed`, a failed install with no version gives `Failed`, a cancel and an agreements stop go to the rest state.
+3. Exit 0 -> `Installed` and store the target version (the catalog target; the read of the installed version from `winget list` is a known gap of SPEC §6.7, owner: the F1 fix). Follow the end table of SPEC §6.7: a failure with a version before keeps `Installed`, a failed install with no version gives `Failed`, a cancel and an agreements stop go to the rest state.
 4. Release the guard on every path (drop guard).
 5. `is_paid` packages have no in-app install path; only the browser hand-off.

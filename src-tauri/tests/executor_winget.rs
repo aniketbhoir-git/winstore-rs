@@ -834,11 +834,9 @@ fn live_tree<'a>(
 
 #[tokio::test]
 async fn cancel_that_cannot_stop_the_tree_emits_one_cancel_failed_event() {
-    let mut fx = Fx::new(
-        "sleep 1500
-exit 0
-",
-    );
+    let pool = store_lib::db::init_memory_pool().await.unwrap();
+    store_lib::db::run_migrations(&pool).await.unwrap();
+    let mut fx = Fx::build("sleep 1500\nexit 0\n", &[], Some(pool.clone()));
     fx.cli = fx.cli.with_stop_fn(live_tree);
     let cli = fx.cli.clone();
     let mut h = cli
@@ -880,4 +878,106 @@ exit 0
     assert_one_terminal_last(&events);
     assert_eq!(events.last().unwrap().stage, OperationStage::Done);
     assert!(!events.last().unwrap().cancel_failed);
+
+    let rows = store_lib::db::repo::operation_log::for_package(&pool, &pkg("A.B"), 50)
+        .await
+        .unwrap();
+    let warns: Vec<_> = rows.iter().filter(|r| r.level == LogLevel::Warn).collect();
+    assert_eq!(warns.len(), 1, "{rows:#?}");
+    assert!(warns[0].message.contains("could not be killed"));
+    assert!(rows.iter().all(|r| r.level != LogLevel::Error), "{rows:#?}");
+}
+
+#[tokio::test]
+async fn cancel_failed_event_gives_up_after_two_seconds_with_no_room() {
+    // 600 distinct bar updates fill the channel up to the slot kept for the terminal event.
+    let mut script = String::from("out Found Some App [Vendor.SomeApp] Version 1.2.3\n");
+    for i in 1..=600 {
+        script.push_str(&format!("out ██▒▒  {i}.00 MB / 1000 MB\n"));
+    }
+    script.push_str("sleep 4000\nexit 0\n");
+    let pool = store_lib::db::init_memory_pool().await.unwrap();
+    store_lib::db::run_migrations(&pool).await.unwrap();
+    let mut fx = Fx::build(&script, &[], Some(pool.clone()));
+    fx.cli = fx.cli.with_stop_fn(live_tree);
+    let cli = fx.cli.clone();
+    let h = cli
+        .install(&pkg("A.B"), &InstallRequest::default())
+        .await
+        .unwrap();
+    // Nobody reads: wait until only the terminal slot is free, then cancel.
+    tokio::time::timeout(Duration::from_secs(20), async {
+        while h.events.len() < h.events.max_capacity() - 1 {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("the channel did not fill");
+    cli.cancel(&h.operation_id).await.unwrap();
+
+    // The executor writes the "no room" row only after its 2 s wait.
+    let no_room = tokio::time::timeout(Duration::from_secs(20), async {
+        loop {
+            let rows = store_lib::db::repo::operation_log::for_package(&pool, &pkg("A.B"), 50)
+                .await
+                .unwrap();
+            if rows
+                .iter()
+                .any(|r| r.level == LogLevel::Warn && r.message.contains("no room"))
+            {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    })
+    .await;
+    assert!(
+        no_room.is_ok(),
+        "no Warn row for the event that did not fit"
+    );
+
+    let (events, outcome) = collect(h).await;
+    outcome.expect("the real outcome stands: exit 0");
+    assert!(events.iter().all(|e| !e.cancel_failed), "{events:#?}");
+    assert_one_terminal_last(&events);
+    assert_eq!(events.last().unwrap().stage, OperationStage::Done);
+}
+
+#[tokio::test]
+async fn log_rows_follow_the_outcome_for_success_and_cancel() {
+    // SPEC §6.7, end table, "Log row": success and cancel give Info rows and no Error row.
+    for (script, cancel, word) in [
+        ("out Successfully installed\nexit 0\n", false, "finished"),
+        (
+            "out Downloading https://x/a.exe\nsleep 20000\nexit 0\n",
+            true,
+            "cancelled",
+        ),
+    ] {
+        let pool = store_lib::db::init_memory_pool().await.unwrap();
+        store_lib::db::run_migrations(&pool).await.unwrap();
+        let fx = Fx::build(script, &[], Some(pool.clone()));
+        let h = fx
+            .cli
+            .install(&pkg("A.B"), &InstallRequest::default())
+            .await
+            .unwrap();
+        if cancel {
+            fx.cli.cancel(&h.operation_id).await.unwrap();
+        }
+        let (_, outcome) = collect(h).await;
+        assert_eq!(outcome.is_err(), cancel, "{word}");
+        let rows = store_lib::db::repo::operation_log::for_package(&pool, &pkg("A.B"), 50)
+            .await
+            .unwrap();
+        assert!(
+            rows.iter()
+                .any(|r| r.level == LogLevel::Info && r.message.contains(word)),
+            "{word}: {rows:#?}"
+        );
+        assert!(
+            rows.iter().all(|r| r.level != LogLevel::Error),
+            "{word}: {rows:#?}"
+        );
+    }
 }

@@ -31,7 +31,7 @@ Rust stable · Tauri 2 · Svelte/TypeScript · SQLite (sqlx) · tokio · windows
 This environment runs `tier:max` issues (winget parser, install loop, msstore adapter,
 elevation). `tier:any` issues are reserved for community contributors on cheaper models.
 
-## Status (2026-11-11)
+## Status (2026-11-13)
 - Done on `main`: #1 scaffold + CI, #2 domain model + persistence, #3 community catalog
   (winget.run, PR #14), #4 winget executor + progress parser (PR #15), #5 Tauri IPC layer + UI
   skeleton (PR #18).
