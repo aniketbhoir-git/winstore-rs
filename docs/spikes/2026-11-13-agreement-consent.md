@@ -228,8 +228,10 @@ for a manifest that has text; the field is `null` in the other cases.
 | (b) Link fallback | Builds `options.consent` for install and (source kind only) uninstall. Reads label and URL of each agreement from stdout or from `winget show`, fills `agreement_url` and also `agreement_text` when winget gives text. | Dialog names the package, version, source and kind, and shows each label with its link; the link opens in the browser. Tests tagged (a, b, c) and (a, b). | Parser for the agreement block, `consent` option on two commands, the dialog, and its tests (WP5 steps 2 and 3 as planned). | Packages with agreements (msstore apps, Microsoft.PowerBI) install after one "Accept". |
 | (c) No consent | Builds no `consent` option; the app never passes a flag. `start_uninstall` also gets no `options`. | No dialog. Each `agreements_required` shows "The agreement text is not available. Store cannot install this package." Tests tagged (a, b, c) only. | Less work: no parser for the block, no dialog, fewer tests. | No package with an agreement installs. On a machine that never accepted the msstore source agreement, no msstore package installs or uninstalls through the app. |
 
-SPEC §6.6 records a maintainer approval of (b) on 2026-11-12. The spike does not change that
-record; it asks the maintainer to confirm it with the facts above.
+SPEC §6.6 records a maintainer approval of (b) on 2026-11-12.
+
+**Decision (maintainer, 2026-11-13):** WP5 builds case (c). Case (b) follows as later work,
+F4 in `docs/ISSUE-BACKLOG.md`. SPEC §6.6 and §7 (WP5) record it.
 
 ## Notes for the SPEC
 

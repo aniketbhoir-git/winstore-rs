@@ -130,6 +130,9 @@ found"), 0x8A150011 is the hash mismatch, 0x8A150027 is a LibYAML error (not ele
 
 ## Agreements (spike of 2026-11-13)
 
+Decision of 2026-11-13: WP5 builds case (c) of SPEC §6.6. The app passes no agreement flag in
+any operation; case (b) (consent with the link) is later work, F4 in `docs/ISSUE-BACKLOG.md`.
+
 Answers to the spike questions of SPEC §6.6. Evidence, commands and source lines:
 `docs/spikes/2026-11-13-agreement-consent.md`. winget v1.29.380. SPEC §6.6 overrides the hard
 rule and the flag rows above until WP5 updates them.

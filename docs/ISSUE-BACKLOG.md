@@ -216,7 +216,8 @@ Design work on them uses the Elephant-Goldfish Model; see `CLAUDE.md`, "Design w
 Fix these in `docs/SPEC.md` before more work packages start. Details are in the review file.
 - **A1:** ✅ spec text fixed on 2026-11-11 (§6.3, §5.2). The code was safe.
 - **A2:** ✅ consent model defined in SPEC §6.6, revised on 2026-11-12 after the EGM review
-  (`docs/reviews/2026-11-11-spec-review-2/`). The app stores no consent; a flag goes to winget
+  (`docs/reviews/2026-11-11-spec-review-2/`). Spike done on 2026-11-13; WP5 builds case (c)
+  (no consent, no flag); case (b) is F4. The app stores no consent; a flag goes to winget
   for one operation after a user "Accept". The code is not built: the spike, the `consent`
   option, the consent dialog, and the removal of the global config flag. SPEC §7, WP5, gives
   the order. This work blocks the merge of PR #19 and the close of #6.
@@ -230,3 +231,17 @@ Fix these in `docs/SPEC.md` before more work packages start. Details are in the 
 
 Decided on 2026-11-11 — **A7 (phases):** the SPEC §7 order is the schedule. Update-all follows
 the MVP and headless stays in Phase 3. `docs/STRATEGY.md` §1.2 and §1.3 now agree.
+
+### F4 — Agreement consent with the link fallback (case (b) of SPEC §6.6, later) — no GitHub issue yet
+Decided on 2026-11-13: WP5 builds case (c), and case (b) follows later. The spike
+(`docs/spikes/2026-11-13-agreement-consent.md`) found that winget agreements have a label and a
+link, and no text. Until F4 is done, Store does not install a package that needs an agreement
+(for example `Microsoft.PowerBI` and msstore apps), and an msstore operation fails on a machine
+that never accepted the msstore source agreement.
+- Scope: the case (b) row of SPEC §6.6. The `consent` option on `start_install`, and on
+  `start_uninstall` with the source kind only (spike question 3). A parser for the winget
+  agreement block (label, text, URL). `agreement_url` and `agreement_text` in the error. The
+  consent dialog with the link. The tests tagged (a, b).
+- Fix `ProgressParser::agreements_shown()`: it matches the install notice that winget prints for
+  every install, not an agreement (spike E7).
+- Needs: PR #19 merged, and the UI test level of `docs/designs/unattended-testing.md`.

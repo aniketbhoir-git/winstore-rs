@@ -5,9 +5,10 @@
 > how the app works: its rules, its data, its commands and its work packages. It contains no
 > code.
 
-> **Status of this document (2026-11-12):** WP0 to WP4 are on `main`. WP5 is partly built: its
-> code is on branch `impl/6--install-loop` (PR #19, open). The WP5 work that remains is the
-> spike and the consent flow of §6.6 and the WP5 rows of the gap table in §6.7. PR #19 does
+> **Status of this document (2026-11-13):** WP0 to WP4 are on `main`. WP5 is partly built: its
+> code is on branch `impl/6--install-loop` (PR #19, open). The spike of §6.6 is done
+> (`docs/spikes/2026-11-13-agreement-consent.md`); the maintainer selected case (c) for WP5 on 2026-11-13. The WP5 work that
+> remains is the case (c) part of §6.6 and the WP5 rows of the gap table in §6.7. PR #19 does
 > not merge before the spike and the core part of that work are done. Maintainer decision of
 > 2026-11-12: the UI part goes into a second pull request, after the approval of
 > `docs/designs/unattended-testing.md` (§7, WP5). Bug F1 (#20) does not gate PR #19; it gates the MVP
@@ -232,7 +233,7 @@ adds.
 | Risk | Mitigation or owner |
 |---|---|
 | The app accepts an agreement that the user did not see. | §6.6: the app stores no consent and passes a flag only directly after a user "Accept". |
-| winget gives no agreement text without an interactive prompt, so the consent dialog has nothing to show. | The spike in §6.6 comes first in WP5. A link fallback is named there; the maintainer approved it on 2026-11-12. |
+| winget gives no agreement text without an interactive prompt, so the consent dialog has nothing to show. | The spike in §6.6 comes first in WP5. The spike of 2026-11-13 found agreements with a link and no text. WP5 builds case (c): Store does not install such a package. The link fallback of case (b) is later work (backlog F4). |
 | The third-party catalog is stale or wrong (bug F1). | ADR 0001. Until it is accepted, the search results are not reliable. |
 | winget prints text with no format contract. A winget update or a non-English Windows can break a parser. | Parse by column position, not by header words. Keep a recorded-output fixture per supported winget version. On a parse failure, show an indeterminate progress bar and let the exit code decide. |
 | Two installs of different packages run together and Windows Installer refuses the second one (error 1618). | One queue for operations that change the system; WP6 (§6.7 gap table). |
@@ -593,9 +594,14 @@ opens no dialog and shows this message, which it makes from `error.code` and the
 fields: "The agreement text is not available. Store cannot install this package." In case
 (c), each `agreements_required` ends so.
 
-**The maintainer approved the fallback of case (b) on 2026-11-12:** a dialog that names the
-agreement and shows its link satisfies hard rule 4. Case (c) thus does not apply to WP5 as a
-whole. The "no text" rule stays for an operation that has no text and no link.
+**Spike result and decision (2026-11-13).** The spike (`docs/spikes/2026-11-13-agreement-consent.md`) points to not (a): each
+agreement that it found has a label and a link, and no text. The maintainer approved the
+fallback of case (b) on 2026-11-12: a dialog that names the agreement and shows its link
+satisfies hard rule 4. On 2026-11-13 the maintainer decided that **WP5 builds case (c)**, and
+that case (b) follows as later work (backlog F4). In WP5 each `agreements_required` thus ends
+with the "no text" rule, the app never passes an agreement flag, and `start_install` and
+`start_uninstall` get no `consent` option. The work for case (b) uses the answer to spike
+question 3: `start_uninstall` then gets a consent with the source kind only.
 
 #### Flow
 
@@ -878,20 +884,20 @@ community source gives none), cancel, uninstall, log tail, and the commands `sta
 `get_install_status`, `get_operation_log` (§5.4). State rules: §6.7. Work that remains, in
 this order:
 
-1. The spike of §6.6. Its result decides between case (a) and not (a) of the table there;
-   the maintainer decides between (b) and (c). Its answer to question 3 selects the uninstall
-   work.
+1. ✅ The spike of §6.6, done on 2026-11-13 (`docs/spikes/2026-11-13-agreement-consent.md`). Result: not (a). The maintainer
+   selected case (c) for WP5; case (b) is later work (backlog F4). In case (c),
+   `start_uninstall` gets no `options`.
 2. The core work: the parts of "Changes that WP5 owns" in §6.6 that are outside `ui/`, and
    the WP5 rows of the gap table in §6.7 (the cancel that cannot stop the tree, and the
    cancelled uninstall).
-3. The UI work: the consent dialog, the handler order, the disabled Cancel button, and the UI
-   tests of §6.6. The UI has no test tool today. This step starts after
+3. The UI work: the handler order, the "no text" message, the disabled Cancel button, and the
+   UI tests of §6.6 with the tag (a, b, c). In case (c) there is no consent dialog. The UI has no test tool today. This step starts after
    `docs/designs/unattended-testing.md` is approved and its component-test level exists. It
    is a second pull request.
 
 PR #19 merges after step 2. Between that merge and the merge of step 3, the UI shows
-`agreements_required` as an error with its message, and a package that needs an agreement
-cannot install through the app. PR #19 can change the UI only as far as that needs; the
+`agreements_required` as an error with its message. In case (c), a package that needs an
+agreement cannot install through the app until the work of backlog F4 is done. PR #19 can change the UI only as far as that needs; the
 change has no automated test, which the maintainer accepted for this one case. The UI tests
 of §6.6 gate the second pull request, not PR #19.
 

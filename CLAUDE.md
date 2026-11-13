@@ -40,6 +40,9 @@ elevation). `tier:any` issues are reserved for community contributors on cheaper
   done (SPEC §7, WP5, steps 1 and 2). The UI work (step 3) is a second pull request; it waits
   for the approved `docs/designs/unattended-testing.md`. Maintainer decisions of 2026-11-12:
   this split, the license-link fallback of SPEC §6.6, and the minimum versions in SPEC §2.
+  Spike of SPEC §6.6 done on 2026-11-13 (`docs/spikes/2026-11-13-agreement-consent.md`): WP5
+  builds case (c) (no consent option, never an agreement flag); case (b) is later work, F4 in
+  `docs/ISSUE-BACKLOG.md`. Next for PR #19: WP5 step 2, the core work.
 - `docs/SPEC.md` was repaired and reviewed with EGM on 2026-11-11 and 2026-11-12. The reports
   are in `docs/reviews/2026-11-11-spec-review-2/`. A section marked *built* or *built on
   branch* follows the code; a *planned* section overrides it. Where a built section and the
