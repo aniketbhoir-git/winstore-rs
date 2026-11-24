@@ -40,7 +40,7 @@ async fn run(label: &str, h: OperationHandle) -> store_lib::error::AppResult<()>
 }
 
 #[tokio::test]
-#[ignore = "runs real winget install/uninstall; needs owner approval"]
+#[ignore = "runs real winget install/uninstall; real winget: runs only on a GitHub-hosted runner (see guard)"]
 async fn install_then_remove_one_small_package() {
     // The guard runs first: a refused run starts no winget process.
     if let Err(msg) = guard(|k| std::env::var(k).ok()) {

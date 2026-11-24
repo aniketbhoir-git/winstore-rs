@@ -11,3 +11,4 @@ SHA256 in `show-vlc.txt` is a placeholder. English Windows layout only.
 - `search-none.txt` - no result (winget exits 0x8A150014).
 - `search-same-name.txt` - two packages with one name, and the cut-list footer (`<...`).
 - `show-vlc.txt` - `winget show --id VideoLAN.VLC --exact --source winget`.
+- `show-multiline.txt` - a show where `Description:` and `Release Notes:` stand alone on their key line and the value follows, indented two spaces.

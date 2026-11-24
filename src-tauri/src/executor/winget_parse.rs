@@ -1059,6 +1059,8 @@ Armoury Crate Service      ARP\\Machine\\X64\\Armoury Crate Service 6.7.6.0
     const SEARCH_SAME: &str = include_str!("../../tests/fixtures/winget/1.29/search-same-name.txt");
     const SEARCH_NONE: &str = include_str!("../../tests/fixtures/winget/1.29/search-none.txt");
     const SHOW_VLC: &str = include_str!("../../tests/fixtures/winget/1.29/show-vlc.txt");
+    const SHOW_MULTILINE: &str =
+        include_str!("../../tests/fixtures/winget/1.29/show-multiline.txt");
 
     #[test]
     fn columns_parse_recorded_vlc_search() {
@@ -1104,11 +1106,25 @@ Armoury Crate Service      ARP\\Machine\\X64\\Armoury Crate Service 6.7.6.0
 
     #[test]
     fn columns_skip_id_without_dot_cut_id_and_empty_version() {
-        let text = "Name   Id        Version\n----------------------\nFoo    nodot     1.0\nCut    A.Cut\u{2026}   1.0\nNoVer  C.NoVer\nOk     D.Ok      3\n";
+        let text = "Name   Id        Version\n----------------------\nFoo    nodot     1.0\nCut    A.Cut\u{2026}    1.0\nNoVer  C.NoVer\nOk     D.Ok      3\n";
         let c = parse_columns(text).unwrap();
         assert_eq!(c.rows.len(), 1);
         assert_eq!(c.rows[0].id, "D.Ok");
         assert_eq!(c.warnings.len(), 3);
+        // The cut id row is aligned, so the "id ends in an ellipsis" rule rejects it, not the
+        // wide-character check.
+        assert!(
+            c.warnings
+                .iter()
+                .any(|w| w.starts_with("row with unusable id skipped: Cut")),
+            "{:?}",
+            c.warnings
+        );
+        assert!(
+            !c.warnings.iter().any(|w| w.contains("misaligned")),
+            "{:?}",
+            c.warnings
+        );
     }
 
     #[test]
@@ -1156,6 +1172,30 @@ Armoury Crate Service      ARP\\Machine\\X64\\Armoury Crate Service 6.7.6.0
         let d = b.description.unwrap();
         assert!(d.starts_with("VLC is a free and open source"));
         assert!(d.ends_with("\nIt also plays network streams and converts media files."));
+    }
+
+    #[test]
+    fn show_joins_a_value_that_starts_on_the_line_after_its_key() {
+        let b = parse_show(SHOW_MULTILINE, "Example.Tool").unwrap();
+        assert_eq!(
+            b.description.as_deref(),
+            Some(
+                "Example Tool converts files.
+It keeps the original layout."
+            )
+        );
+        assert_eq!(
+            b.release_notes.as_deref(),
+            Some(
+                "Fixed a crash on start.
+Faster conversion."
+            )
+        );
+        // Keys after the multi-line value still parse.
+        assert_eq!(b.homepage.as_deref(), Some("https://example.org/tool"));
+        assert_eq!(b.license.as_deref(), Some("MIT"));
+        assert_eq!(b.tags, ["convert"]);
+        assert_eq!(b.installer_type.as_deref(), Some("wix"));
     }
 
     #[test]
