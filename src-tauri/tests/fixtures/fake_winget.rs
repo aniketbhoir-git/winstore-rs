@@ -13,6 +13,8 @@
 //! `file PATH`    print the bytes of the file as they are (no escapes)
 //! `err TEXT`     print TEXT + "\r\n" to stderr
 //! `sleep MS`     sleep
+//! `child MS`     start a grandchild that sleeps MS; its process id goes to
+//!                `FAKE_WINGET_CHILD_PID` (a process-tree test)
 //! `exit CODE`    exit with CODE (decimal or 0x hex; u32 HRESULTs allowed)
 //! ```
 //!
@@ -61,6 +63,11 @@ fn parse_code(s: &str) -> i32 {
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    // Grandchild mode of the `child` directive: only sleep.
+    if args.first().map(String::as_str) == Some("--sleep-only") {
+        std::thread::sleep(Duration::from_millis(args[1].parse().unwrap()));
+        return;
+    }
     if let Ok(p) = std::env::var("FAKE_WINGET_ARGV") {
         let mut f = std::fs::OpenOptions::new()
             .create(true)
@@ -117,6 +124,15 @@ fn main() {
                 e.flush().unwrap();
             }
             "sleep" => std::thread::sleep(Duration::from_millis(rest.trim().parse().unwrap())),
+            "child" => {
+                let child = std::process::Command::new(std::env::current_exe().unwrap())
+                    .args(["--sleep-only", rest.trim()])
+                    .spawn()
+                    .expect("grandchild");
+                if let Ok(p) = std::env::var("FAKE_WINGET_CHILD_PID") {
+                    std::fs::write(p, child.id().to_string()).unwrap();
+                }
+            }
             "exit" => std::process::exit(parse_code(rest)),
             "" => {}
             other => panic!("unknown directive {other}"),

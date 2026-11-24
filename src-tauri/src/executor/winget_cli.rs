@@ -635,21 +635,42 @@ impl WingetCli {
         self.command(args)?.spawn().map_err(map_spawn_err)
     }
 
+    /// Runs a read-only call to its end or to `limit`. On the time limit the whole process
+    /// tree is stopped (Job Object, `taskkill /T /F` as fallback), as for an install, so no
+    /// child of winget outlives the call.
     async fn run_capture_timeout(&self, args: &[String], limit: Duration) -> AppResult<Captured> {
-        let child = self.spawn(args)?;
-        let out = tokio::time::timeout(limit, child.wait_with_output())
-            .await
-            .map_err(|_| {
-                AppError::SourceUnavailable(format!(
+        async fn read_all<R: AsyncRead + Unpin>(pipe: Option<R>) -> Vec<u8> {
+            let mut buf = Vec::new();
+            if let Some(mut p) = pipe {
+                let _ = p.read_to_end(&mut buf).await;
+            }
+            buf
+        }
+        let mut child = self.spawn(args)?;
+        let job = ProcessJob::attach(&child);
+        let stdout = child.stdout.take();
+        let stderr = child.stderr.take();
+        let finished = tokio::time::timeout(limit, async {
+            let (out, err, status) = tokio::join!(read_all(stdout), read_all(stderr), child.wait());
+            (out, err, status)
+        })
+        .await;
+        match finished {
+            Ok((out, err, status)) => Ok(Captured {
+                code: status?.code().unwrap_or(-1),
+                stdout: String::from_utf8_lossy(&out).into_owned(),
+                stderr: String::from_utf8_lossy(&err).into_owned(),
+            }),
+            Err(_) => {
+                let stop = self.inner.stop;
+                stop(&mut child, job.as_ref()).await;
+                let _ = child.wait().await;
+                Err(AppError::SourceUnavailable(format!(
                     "winget did not answer in {}",
                     describe_limit(limit)
-                ))
-            })??;
-        Ok(Captured {
-            code: out.status.code().unwrap_or(-1),
-            stdout: String::from_utf8_lossy(&out.stdout).into_owned(),
-            stderr: String::from_utf8_lossy(&out.stderr).into_owned(),
-        })
+                )))
+            }
+        }
     }
 
     async fn run_capture(&self, args: &[String]) -> AppResult<Captured> {
