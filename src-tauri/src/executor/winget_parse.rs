@@ -1179,13 +1179,17 @@ Armoury Crate Service      ARP\\Machine\\X64\\Armoury Crate Service 6.7.6.0
         let b = parse_show(SHOW_MULTILINE, "Example.Tool").unwrap();
         assert_eq!(
             b.description.as_deref(),
-            Some("Example Tool converts files.
-It keeps the original layout.")
+            Some(
+                "Example Tool converts files.
+It keeps the original layout."
+            )
         );
         assert_eq!(
             b.release_notes.as_deref(),
-            Some("Fixed a crash on start.
-Faster conversion.")
+            Some(
+                "Fixed a crash on start.
+Faster conversion."
+            )
         );
         // Keys after the multi-line value still parse.
         assert_eq!(b.homepage.as_deref(), Some("https://example.org/tool"));

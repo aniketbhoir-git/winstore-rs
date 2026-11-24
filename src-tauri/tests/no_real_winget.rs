@@ -1,6 +1,22 @@
-//! Guard against real winget in tests: no test file except `winget_smoke.rs` and
-//! `winget_catalog_smoke.rs` may call the real-winget constructor. Others use `connect_at` with the subprocess fake.
+//! Guard against real winget in tests. Every `.rs` file under `src/` and `tests/` is scanned,
+//! and only test code counts: whole files under `tests/`, `tests.rs` and `test_support.rs`
+//! style files, modules declared with `#[cfg(test)] mod x;`, and the bodies of inline
+//! `#[cfg(test)] mod x { .. }`. Production code may reach real winget; test code may not.
+//! Only `tests/winget_smoke.rs` and `tests/winget_catalog_smoke.rs` are allow-listed (both
+//! are ignored and guarded to a hosted runner).
+//!
+//! Patterns that count as real winget in test code:
+//! - `WingetCli::connect(`, and `Self::connect(` inside an `impl WingetCli` file
+//! - `WingetCli::discover`
+//! - `connect_at(` with a path that is not the fake or a temp-dir path
+//! - a renamed import of `WingetCli` (`use ... WingetCli as X`), which hides the others
+//! - `AppState::new(` (the default winget factory), and `.core()` on a state that the file
+//!   did not build with a fake executor
+//!
+//! This file builds its patterns from pieces so it does not match itself; its sample strings
+//! use `@`, `%` and `$` for the type names and `connect_at` for the same reason.
 
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 fn rs_files(dir: &Path, out: &mut Vec<PathBuf>) {
@@ -14,31 +30,361 @@ fn rs_files(dir: &Path, out: &mut Vec<PathBuf>) {
     }
 }
 
-#[test]
-fn only_winget_smoke_calls_real_winget_connect() {
-    // Built from pieces so this file does not match itself.
-    let needle = format!("{}::connect(", "WingetCli");
-    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let mut files = Vec::new();
-    rs_files(&root.join("tests"), &mut files);
-    // Unit-test modules inside src/.
-    let mut src = Vec::new();
-    rs_files(&root.join("src"), &mut src);
-    files.extend(src.into_iter().filter(|p| {
-        p.file_name().is_some_and(|n| n == "tests.rs")
-            || p.components().any(|c| c.as_os_str() == "tests")
-    }));
-    let offenders: Vec<_> = files
+// -- a small lexer: enough Rust to skip comments, strings and chars --------------------------
+
+/// If a comment, string or char literal starts at `i`, returns the index after it and whether
+/// it was a comment.
+fn skip_token(b: &[u8], i: usize) -> Option<(usize, bool)> {
+    let n = b.len();
+    match b[i] {
+        b'/' if b.get(i + 1) == Some(&b'/') => {
+            let mut j = i;
+            while j < n && b[j] != b'\n' {
+                j += 1;
+            }
+            Some((j, true))
+        }
+        b'/' if b.get(i + 1) == Some(&b'*') => {
+            let (mut j, mut depth) = (i + 2, 1);
+            while j < n && depth > 0 {
+                if b[j] == b'/' && b.get(j + 1) == Some(&b'*') {
+                    depth += 1;
+                    j += 2;
+                } else if b[j] == b'*' && b.get(j + 1) == Some(&b'/') {
+                    depth -= 1;
+                    j += 2;
+                } else {
+                    j += 1;
+                }
+            }
+            Some((j, true))
+        }
+        b'r' if i == 0 || !(b[i - 1].is_ascii_alphanumeric() || b[i - 1] == b'_') => {
+            let mut j = i + 1;
+            while b.get(j) == Some(&b'#') {
+                j += 1;
+            }
+            if b.get(j) != Some(&b'"') {
+                return None;
+            }
+            let hashes = j - i - 1;
+            j += 1;
+            while j < n {
+                if b[j] == b'"' && (0..hashes).all(|k| b.get(j + 1 + k) == Some(&b'#')) {
+                    return Some((j + 1 + hashes, false));
+                }
+                j += 1;
+            }
+            Some((n, false))
+        }
+        b'"' => {
+            let mut j = i + 1;
+            while j < n && b[j] != b'"' {
+                j += if b[j] == b'\\' { 2 } else { 1 };
+            }
+            Some(((j + 1).min(n), false))
+        }
+        b'\'' => {
+            if b.get(i + 1) == Some(&b'\\') {
+                let mut j = i + 2;
+                while j < n && b[j] != b'\'' {
+                    j += 1;
+                }
+                Some(((j + 1).min(n), false))
+            } else if b.get(i + 2) == Some(&b'\'') {
+                Some((i + 3, false))
+            } else {
+                None // a lifetime
+            }
+        }
+        _ => None,
+    }
+}
+
+/// The text with comments blanked out (same length, newlines kept).
+fn strip_comments(text: &str) -> String {
+    let b = text.as_bytes();
+    let mut out = b.to_vec();
+    let mut i = 0;
+    while i < b.len() {
+        match skip_token(b, i) {
+            Some((j, true)) => {
+                for byte in out.iter_mut().take(j).skip(i) {
+                    if *byte != b'\n' {
+                        *byte = b' ';
+                    }
+                }
+                i = j;
+            }
+            Some((j, false)) => i = j,
+            None => i += 1,
+        }
+    }
+    String::from_utf8(out).unwrap_or_default()
+}
+
+/// Index of the `}` that closes the `{` at `open`.
+fn matching_brace(b: &[u8], open: usize) -> usize {
+    let (mut depth, mut i) = (0usize, open);
+    while i < b.len() {
+        if let Some((j, _)) = skip_token(b, i) {
+            i = j;
+            continue;
+        }
+        match b[i] {
+            b'{' => depth += 1,
+            b'}' => {
+                depth -= 1;
+                if depth == 0 {
+                    return i;
+                }
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    b.len()
+}
+
+/// `#[cfg(test)]` modules of one comment-free source: the bodies of inline ones, and the
+/// names of out-of-line ones (`#[cfg(test)] mod name;`).
+fn cfg_test_modules(clean: &str) -> (Vec<String>, Vec<String>) {
+    let attr = "#[cfg(test)]";
+    let (mut bodies, mut names) = (Vec::new(), Vec::new());
+    let mut from = 0;
+    while let Some(at) = clean[from..].find(attr) {
+        let start = from + at + attr.len();
+        from = start;
+        let mut rest = clean[start..].trim_start();
+        // Skip further attributes and the visibility.
+        while rest.starts_with("#[") {
+            match rest.find(']') {
+                Some(e) => rest = rest[e + 1..].trim_start(),
+                None => break,
+            }
+        }
+        if let Some(r) = rest.strip_prefix("pub") {
+            rest = r.trim_start();
+            if rest.starts_with('(') {
+                if let Some(e) = rest.find(')') {
+                    rest = rest[e + 1..].trim_start();
+                }
+            }
+        }
+        let Some(r) = rest.strip_prefix("mod ") else {
+            continue;
+        };
+        let name_end = r
+            .find(|c: char| !(c.is_alphanumeric() || c == '_'))
+            .unwrap_or(r.len());
+        let name = r[..name_end].to_string();
+        let after = r[name_end..].trim_start();
+        if after.starts_with(';') {
+            names.push(name);
+        } else if after.starts_with('{') {
+            let open = clean.len() - after.len();
+            let close = matching_brace(clean.as_bytes(), open);
+            bodies.push(clean[open..close.min(clean.len())].to_string());
+        }
+    }
+    (bodies, names)
+}
+
+// -- the patterns -----------------------------------------------------------------------------
+
+/// Joins pieces: patterns are built at run time so this file never contains them.
+fn p(parts: &[&str]) -> String {
+    parts.concat()
+}
+
+/// The argument text of the call that starts right after `open` (a `(`), up to its `)`.
+fn call_args(text: &str, open: usize) -> &str {
+    let b = text.as_bytes();
+    let (mut depth, mut i) = (0usize, open);
+    while i < b.len() {
+        match b[i] {
+            b'(' => depth += 1,
+            b')' => {
+                depth -= 1;
+                if depth == 0 {
+                    return &text[open + 1..i];
+                }
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    &text[open + 1..]
+}
+
+/// Names of the patterns that `test_code` (comment-free) breaks. `file` is the whole file
+/// the code is from, for the rules that depend on it.
+fn violations(test_code: &str, file: &str) -> Vec<&'static str> {
+    let cli = p(&["Winget", "Cli"]);
+    let mut found = Vec::new();
+    if test_code.contains(&p(&[&cli, "::connect("])) {
+        found.push("real connect");
+    }
+    if file.contains(&p(&["impl ", &cli])) && test_code.contains(&p(&["Self", "::connect("])) {
+        found.push("Self connect in impl");
+    }
+    if test_code.contains(&p(&[&cli, "::discover"])) {
+        found.push("discover");
+    }
+    let connect_at = p(&["connect", "_at("]);
+    let mut from = 0;
+    while let Some(at) = test_code[from..].find(&connect_at) {
+        let open = from + at + connect_at.len() - 1;
+        let args = call_args(test_code, open);
+        // A path from the fake or from a temp dir never reaches the real winget.
+        if !["fake_exe", "dir.path()", "tempdir", "tmp.path()"]
+            .iter()
+            .any(|ok| args.contains(ok))
+        {
+            found.push("connect_at with a real path");
+            break;
+        }
+        from = open + 1;
+    }
+    if test_code.contains(&p(&[&cli, " as "])) {
+        found.push("renamed import");
+    }
+    if test_code.contains(&p(&["AppState", "::new("])) {
+        found.push("default state");
+    }
+    let builds_fake = ["with_core(", "state_with(", "Core::new("]
         .iter()
-        .filter(|p| {
-            !p.ends_with("winget_smoke.rs")
-                && !p.ends_with("winget_catalog_smoke.rs")
-                && !p.ends_with("no_real_winget.rs")
+        .any(|b| file.contains(b));
+    if test_code.contains(".core()") && !builds_fake {
+        found.push("core without a fake executor");
+    }
+    found
+}
+
+fn is_test_file(path: &Path, test_mods: &BTreeSet<String>) -> bool {
+    let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+    let dir = path
+        .parent()
+        .and_then(|d| d.file_name())
+        .and_then(|d| d.to_str())
+        .unwrap_or("");
+    stem == "tests"
+        || stem == "test_support"
+        || dir == "tests"
+        || test_mods.contains(stem)
+        || (stem == "mod" && test_mods.contains(dir))
+}
+
+fn scan_tree(root: &Path) -> Vec<String> {
+    let mut files = Vec::new();
+    rs_files(&root.join("src"), &mut files);
+    rs_files(&root.join("tests"), &mut files);
+    let sources: Vec<(PathBuf, String)> = files
+        .into_iter()
+        .map(|f| {
+            let text = strip_comments(&std::fs::read_to_string(&f).unwrap());
+            (f, text)
         })
-        .filter(|p| std::fs::read_to_string(p).unwrap().contains(&needle))
         .collect();
+    let test_mods: BTreeSet<String> = sources
+        .iter()
+        .flat_map(|(_, t)| cfg_test_modules(t).1)
+        .collect();
+    let mut offenders = Vec::new();
+    for (path, text) in &sources {
+        if path.ends_with("tests/winget_smoke.rs") || path.ends_with("tests\\winget_smoke.rs") {
+            continue;
+        }
+        let code = if is_test_file(path, &test_mods) {
+            vec![text.clone()]
+        } else {
+            cfg_test_modules(text).0
+        };
+        for part in code {
+            for v in violations(&part, text) {
+                offenders.push(format!("{}: {v}", path.display()));
+            }
+        }
+    }
+    offenders
+}
+
+#[test]
+fn no_test_code_calls_real_winget() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let offenders = scan_tree(root);
     assert!(
         offenders.is_empty(),
-        "real winget called from: {offenders:?}"
+        "real winget reachable from test code: {offenders:#?}"
     );
+}
+
+// -- self-tests: the scanner flags each pattern ----------------------------------------------
+
+fn sample(text: &str) -> String {
+    text.replace('@', &p(&["Winget", "Cli"]))
+        .replace('%', &p(&["App", "State"]))
+        .replace('$', &p(&["connect", "_at"]))
+}
+
+fn flagged(code: &str) -> Vec<&'static str> {
+    let code = strip_comments(&sample(code));
+    violations(&code, &code)
+}
+
+#[test]
+fn scanner_flags_each_real_winget_pattern() {
+    assert_eq!(
+        flagged("let c = @::connect(o).await;"),
+        ["real connect"],
+        "plain connect"
+    );
+    assert!(flagged("impl @ { fn t() { Self::connect(o); } }").contains(&"Self connect in impl"));
+    assert_eq!(flagged("let p = @::discover().await;"), ["discover"]);
+    assert_eq!(
+        flagged("let c = @::$(real_path, o);"),
+        ["connect_at with a real path"]
+    );
+    assert_eq!(
+        flagged("use store_lib::executor::@ as Cli2;"),
+        ["renamed import"]
+    );
+    assert_eq!(
+        flagged("let s = %::new(); let c = s.core().await;"),
+        ["default state", "core without a fake executor"]
+    );
+    assert_eq!(
+        flagged("let c = state.core().await;"),
+        ["core without a fake executor"]
+    );
+}
+
+#[test]
+fn scanner_accepts_the_fake_and_ignores_comments() {
+    assert!(flagged("@::$(fake_exe(), o).await").is_empty());
+    assert!(flagged("@::$(dir.path().join(\"absent.exe\"), o)").is_empty());
+    assert!(flagged("let s = state_with(f); s.core().await").is_empty());
+    assert!(flagged("// @::connect(o) in a comment\nlet x = 1;").is_empty());
+    assert!(flagged("/* @::discover() */ let x = 1;").is_empty());
+}
+
+#[test]
+fn scanner_reads_only_test_code_of_a_source_file() {
+    let src = strip_comments(&sample(
+        "fn prod() { @::connect(o); }\n\
+         #[cfg(test)]\nmod tests {\n    fn t() { let s = \"}\"; @::connect(o); }\n}\n\
+         fn more() { @::discover(); }\n\
+         #[cfg(test)]\nmod split;\n",
+    ));
+    let (bodies, names) = cfg_test_modules(&src);
+    assert_eq!(names, ["split"]);
+    assert_eq!(bodies.len(), 1);
+    // The inline test body is flagged; the production calls around it are not in it.
+    assert_eq!(violations(&bodies[0], &src), ["real connect"]);
+    assert!(!bodies[0].contains("discover"));
+    let mods: BTreeSet<String> = names.into_iter().collect();
+    assert!(is_test_file(Path::new("src/x/split.rs"), &mods));
+    assert!(is_test_file(Path::new("src/x/split/mod.rs"), &mods));
+    assert!(is_test_file(Path::new("src/x/tests.rs"), &mods));
+    assert!(!is_test_file(Path::new("src/x/other.rs"), &mods));
 }

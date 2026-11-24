@@ -1125,7 +1125,10 @@ sleep 60000
         }
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
-    assert!(gone, "grandchild {child} still running after the time limit");
+    assert!(
+        gone,
+        "grandchild {child} still running after the time limit"
+    );
     let parent = std::fs::read_to_string(fx.dir.path().join("pid.txt")).unwrap();
     assert!(!alive(&parent), "winget {parent} still running");
 }
