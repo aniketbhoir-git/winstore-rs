@@ -43,10 +43,32 @@ impl InstallOptions {
             Some("machine") => Some(InstallScope::Machine),
             Some(other) => return Err(AppError::InvalidConfig(format!("unknown scope: {other}"))),
         };
-        Ok(InstallRequest {
-            version: self.version.filter(|v| !v.trim().is_empty()),
-            scope,
-        })
+        let version = match self.version.as_deref().map(str::trim) {
+            None | Some("") => None,
+            Some(v) => {
+                validate_version(v)?;
+                Some(v.to_string())
+            }
+        };
+        Ok(InstallRequest { version, scope })
+    }
+}
+
+/// Longest version string accepted from the UI.
+const VERSION_MAX_LEN: usize = 64;
+
+/// A version goes to winget as an argument value, so it may hold only `[0-9A-Za-z._+-]`, may
+/// not start with `-` (it would read as a flag) and must be short.
+pub(crate) fn validate_version(v: &str) -> AppResult<()> {
+    let ok = !v.is_empty()
+        && v.len() <= VERSION_MAX_LEN
+        && !v.starts_with('-')
+        && v.chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '+' | '-'));
+    if ok {
+        Ok(())
+    } else {
+        Err(AppError::InvalidConfig(format!("invalid version: {v:?}")))
     }
 }
 
@@ -157,39 +179,43 @@ pub async fn run_update_all(state: &AppState, sink: SharedSink) -> AppResult<Upd
     let mut outcomes = Vec::with_capacity(updates.len());
     for u in updates {
         let target = Some(u.latest_version.clone());
-        let result = match executor.update(&u.package_id).await {
-            Ok(handle) => {
-                // A ledger refusal (for example a pinned row) is this package's failure, not
-                // the loop's: cancel the started update, settle it, and continue.
-                match install::begin(
-                    &core,
-                    &u.package_id,
-                    Operation::Update,
-                    target.clone(),
-                    Some(&u.installed_version),
-                )
-                .await
-                {
-                    Ok(()) => {
-                        install::track(&core, &u.package_id, &handle, Operation::Update);
-                        install::drive(
-                            &core,
-                            &sink,
-                            handle,
-                            &u.package_id,
-                            Operation::Update,
-                            target,
-                        )
-                        .await
-                    }
-                    Err(e) => {
-                        let _ = executor.cancel(&handle.operation_id).await;
-                        install::abandon(&sink, handle, &u.package_id, error_json(&e)).await;
-                        Err(e)
+        // Ask the ledger first (as `start_install` does): a refused package (pinned, busy)
+        // never reaches the executor, so no winget process starts for it.
+        let result = match install::check_ledger(&core, &u.package_id, Operation::Update).await {
+            Err(e) => Err(e),
+            Ok(()) => match executor.update(&u.package_id).await {
+                Ok(handle) => {
+                    // The ledger can still refuse `begin`; settle the started update then.
+                    match install::begin(
+                        &core,
+                        &u.package_id,
+                        Operation::Update,
+                        target.clone(),
+                        Some(&u.installed_version),
+                    )
+                    .await
+                    {
+                        Ok(()) => {
+                            install::track(&core, &u.package_id, &handle, Operation::Update);
+                            install::drive(
+                                &core,
+                                &sink,
+                                handle,
+                                &u.package_id,
+                                Operation::Update,
+                                target,
+                            )
+                            .await
+                        }
+                        Err(e) => {
+                            let _ = executor.cancel(&handle.operation_id).await;
+                            install::abandon(&sink, handle, &u.package_id, error_json(&e)).await;
+                            Err(e)
+                        }
                     }
                 }
-            }
-            Err(e) => Err(e),
+                Err(e) => Err(e),
+            },
         };
         outcomes.push(UpdateOutcome {
             package_id: u.package_id.clone(),
