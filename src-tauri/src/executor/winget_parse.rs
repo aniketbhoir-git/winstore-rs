@@ -506,7 +506,8 @@ pub fn parse_columns(text: &str) -> Option<Columns> {
             name: it.next().unwrap_or_default(),
             id: it.next().unwrap_or_default(),
             version: it.next().unwrap_or_default(),
-            extra: it.collect(),
+            // Real winget leaves the Match cell empty on some rows (no match reason).
+            extra: it.filter(|c| !c.is_empty()).collect(),
         });
     }
     Some(out)
@@ -1116,14 +1117,19 @@ Armoury Crate Service      ARP\\Machine\\X64\\Armoury Crate Service 6.7.6.0
         let c = parse_columns(SEARCH_VLC).unwrap();
         assert!(c.warnings.is_empty(), "{:?}", c.warnings);
         assert!(!c.truncated);
-        assert_eq!(c.rows.len(), 4);
+        assert_eq!(c.rows.len(), 10);
         let first = &c.rows[0];
         assert_eq!(first.name, "VLC media player");
         assert_eq!(first.id, "VideoLAN.VLC");
-        assert_eq!(first.version, "3.0.21");
+        assert_eq!(first.version, "3.0.24");
         assert_eq!(first.extra, vec!["Moniker: vlc".to_string()]);
-        assert_eq!(c.rows[1].name, "VLC media player Nightly");
-        assert_eq!(c.rows[1].version, "4.0.0-dev");
+        assert_eq!(c.rows[1].name, "pympress");
+        assert_eq!(c.rows[1].extra, vec!["Tag: vlc".to_string()]);
+        // Real layout: a name that fills its column, and an empty Match cell.
+        assert_eq!(c.rows[8].name, "VLC media player (Nightly)");
+        assert_eq!(c.rows[8].id, "VideoLAN.VLC.Nightly");
+        assert_eq!(c.rows[8].version, "4.0.0");
+        assert!(c.rows[8].extra.is_empty());
     }
 
     #[test]
@@ -1196,22 +1202,34 @@ Armoury Crate Service      ARP\\Machine\\X64\\Armoury Crate Service 6.7.6.0
     #[test]
     fn columns_ignore_spinner_noise_and_cr() {
         let text = format!("-\r\\\r|\r{}", SEARCH_VLC.replace('\n', "\r\n"));
-        assert_eq!(parse_columns(&text).unwrap().rows.len(), 4);
+        assert_eq!(parse_columns(&text).unwrap().rows.len(), 10);
     }
 
     #[test]
     fn show_parses_recorded_vlc() {
         let b = parse_show(SHOW_VLC, "videolan.vlc").unwrap();
         assert_eq!(b.name, "VLC media player");
-        assert_eq!(b.version.as_deref(), Some("3.0.21"));
+        assert_eq!(b.version.as_deref(), Some("3.0.24"));
         assert_eq!(b.publisher.as_deref(), Some("VideoLAN"));
         assert_eq!(b.homepage.as_deref(), Some("https://www.videolan.org/vlc/"));
-        assert_eq!(b.license.as_deref(), Some("GPL-2.0-or-later"));
-        assert_eq!(b.tags, ["audio", "media", "player", "video"]);
-        assert_eq!(b.installer_type.as_deref(), Some("nullsoft"));
-        assert!(b.installer_url.as_deref().unwrap().ends_with("win64.exe"));
+        assert_eq!(b.license.as_deref(), Some("GPL-2.0"));
+        assert_eq!(
+            b.tags,
+            [
+                "audio-player",
+                "audioplayer",
+                "cross-platform",
+                "dvd",
+                "foss",
+                "media-player",
+                "multimedia",
+                "video-player"
+            ]
+        );
+        assert_eq!(b.installer_type.as_deref(), Some("wix"));
+        assert!(b.installer_url.as_deref().unwrap().ends_with("win64.msi"));
         assert_eq!(b.installer_sha256.as_deref().map(str::len), Some(64));
-        assert_eq!(b.release_date.as_deref(), Some("2024-06-19"));
+        assert_eq!(b.release_date.as_deref(), Some("2026-09-21"));
         assert_eq!(b.release_notes, None);
     }
 
@@ -1220,7 +1238,7 @@ Armoury Crate Service      ARP\\Machine\\X64\\Armoury Crate Service 6.7.6.0
         let b = parse_show(SHOW_VLC, "VideoLAN.VLC").unwrap();
         let d = b.description.unwrap();
         assert!(d.starts_with("VLC is a free and open source"));
-        assert!(d.ends_with("\nIt also plays network streams and converts media files."));
+        assert!(d.ends_with("\nCompletely Free - no spyware, no ads and no user tracking."));
     }
 
     #[test]

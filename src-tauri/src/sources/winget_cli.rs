@@ -219,12 +219,12 @@ mod tests {
         let s = summary_from_row(SearchRow {
             name: "VLC media player".into(),
             id: "VideoLAN.VLC".into(),
-            version: "3.0.21".into(),
+            version: "3.0.24".into(),
             extra: vec![],
         });
         assert_eq!(s.id.as_str(), "winget_community/VideoLAN.VLC");
         assert_eq!(s.publisher, "");
-        assert_eq!(s.latest_version, "3.0.21");
+        assert_eq!(s.latest_version, "3.0.24");
         assert_eq!(s.packaging, PackagingKind::Unknown);
         assert!(!s.is_paid);
     }
@@ -239,10 +239,10 @@ mod tests {
         assert!(d.full_description.contains('\n'));
         assert_eq!(d.versions.len(), 1);
         assert_eq!(
-            d.versions["3.0.21"].release_date.as_deref(),
-            Some("2024-06-19")
+            d.versions["3.0.24"].release_date.as_deref(),
+            Some("2026-09-21")
         );
-        assert_eq!(d.installer.install_type, PackagingKind::Exe);
+        assert_eq!(d.installer.install_type, PackagingKind::Msi);
     }
 
     #[test]

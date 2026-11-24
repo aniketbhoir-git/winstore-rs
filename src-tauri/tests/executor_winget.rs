@@ -1092,7 +1092,7 @@ async fn search_catalog_parses_fixture_and_passes_the_documented_argv() {
     let fx = Fx::new(&format!("file {}\n", fixture("search-vlc.txt")));
     let rows = fx.cli.search_catalog("  vlc ", 30).await.unwrap();
     assert_eq!(rows[0].id, "VideoLAN.VLC");
-    assert_eq!(rows.len(), 4);
+    assert_eq!(rows.len(), 10);
     assert_eq!(
         fx.last_argv().join(" "),
         "search --query vlc --source winget --count 30 --disable-interactivity"

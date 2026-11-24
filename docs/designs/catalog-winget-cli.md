@@ -135,7 +135,11 @@ columns by position. It never reads a header word.
    - the cell at position 2 is empty.
 6. The **cut-list footer** is detected on its own. winget prints a line that starts with `<`
    when it cut the result list. The parser ends the data rows at the first line that starts
-   with `<`. It does not rely on the row rules above for this line.
+   with `<`. It does not rely on the row rules above for this line. A recording from winget
+   1.29.380 (stdout a pipe, GitHub runner, 2026-11-25) shows no cut cell and no footer for
+   ten rows; the longest line is 77 characters. The footer text is still from the winget
+   source, not from a recording.
+   A row can have an empty Match cell; the parser drops empty extra cells.
 7. The parser returns the rows and the warnings.
 
 The search maps the cells by position:
@@ -366,7 +370,7 @@ Each choice of taste below takes the option that is easiest to reverse.
 | Risk | Mitigation |
 |---|---|
 | A winget update changes the table or the show block. | Fixtures per winget version; `source_unavailable` when nothing parses; the real-winget check in CI. |
-| The first `show` is slow on each machine. | Loading state, 60 s limit, cache. Step 6 measures a second machine. 20 s or more on each machine reopens option D or E. |
+| The first `show` is slow on each machine. | Loading state, 60 s limit, cache. Step 6 measured a runner on 2026-11-25: first `show` 457 ms, second 258 ms. A second machine is still open. 20 s or more on each machine reopens option D or E. |
 | Non-English Windows. | Column parser has no header words. The show key table does; stated in the README. |
 | The `winget` source adds an agreement later. | Fail closed with `agreements_required`. No flag is passed. |
 | Search spawns a process per query. | The UI debounces. Each search takes about 0.3 s. |
