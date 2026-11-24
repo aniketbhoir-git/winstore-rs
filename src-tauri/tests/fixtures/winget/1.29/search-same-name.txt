@@ -1,6 +1,6 @@
-Name                          Id                                Version       Match
-------------------------------------------------------------------------------------------------
-Sample Notes                  AcmeSoft.SampleNotes              2.1.0         Name: Sample Notes
-Sample Notes                  BetaWorks.SampleNotes             0.8.3         Name: Sample Notes
-Sample Notes Sync             AcmeSoft.SampleNotes.Sync         1.0.0         Tag: notes
+Name                       Id                         Version    Match
+-----------------------------------------------------------------------------
+Sample Notes               AcmeSoft.SampleNotes       2.1.0      Name: Sample Notes
+Sample Notes               BetaWorks.SampleNotes      0.8.3      Name: Sample Notes
+Sample Notes Sync          AcmeSoft.SampleNotes.Sync  1.0.0      Tag: notes
 <additional entries truncated due to result limit>

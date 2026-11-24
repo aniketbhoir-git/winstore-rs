@@ -1,11 +1,16 @@
 Found Example Tool [Example.Tool]
 Version: 2.1.0
 Publisher: Example Org
+Publisher Url: https://example.org/
+Publisher Support Url: https://example.org/support/
+Author: Example Org
+Moniker: exampletool
 Description:
   Example Tool converts files.
   It keeps the original layout.
 Homepage: https://example.org/tool
 License: MIT
+License Url: https://example.org/tool/license
 Release Notes:
   Fixed a crash on start.
   Faster conversion.
@@ -16,3 +21,4 @@ Installer:
   Installer Url: https://example.org/tool-2.1.0.msi
   Installer SHA256: 0000000000000000000000000000000000000000000000000000000000000000
   Release Date: 2025-01-02
+  Offline Distribution Supported: true

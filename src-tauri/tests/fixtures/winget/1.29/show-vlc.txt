@@ -1,27 +1,35 @@
 Found VLC media player [VideoLAN.VLC]
-Version: 3.0.21
+Version: 3.0.24
 Publisher: VideoLAN
 Publisher Url: https://www.videolan.org/
 Publisher Support Url: https://www.videolan.org/support/
 Author: VideoLAN
 Moniker: vlc
-Description: VLC is a free and open source cross-platform multimedia player and framework that plays most multimedia files as well as DVDs, Audio CDs, VCDs, and various streaming protocols.
-  It also plays network streams and converts media files.
+Description:
+  VLC is a free and open source cross-platform multimedia player and framework
+  that plays most multimedia files as well as DVDs, Audio CDs, VCDs, and various
+  streaming protocols.
+  
+  Simple, fast and powerful
+    Plays everything - Files, Discs, Webcams, Devices and Streams.
+    Plays most codecs with no codec packs needed - MPEG-2, MPEG-4, H.264, MKV, WebM,
+      WMV, MP3...
+    Completely Free - no spyware, no ads and no user tracking.
 Homepage: https://www.videolan.org/vlc/
-License: GPL-2.0-or-later
-License Url: https://www.videolan.org/legal.html
-Copyright: Copyright (C) 1996-2024 VideoLAN and VLC Authors
-Release Notes Url: https://github.com/videolan/vlc/blob/master/NEWS
+License: GPL-2.0
+License Url: https://code.videolan.org/videolan/vlc/-/blob/HEAD/COPYING
 Tags:
-  audio
-  media
-  player
-  video
-Agreements:
-  License: GPL-2.0-or-later
+  audio-player
+  audioplayer
+  cross-platform
+  dvd
+  foss
+  media-player
+  multimedia
+  video-player
 Installer:
-  Installer Type: nullsoft
-  Installer Locale: en-US
-  Installer Url: https://get.videolan.org/vlc/3.0.21/win64/vlc-3.0.21-win64.exe
-  Installer SHA256: 0000000000000000000000000000000000000000000000000000000000000000
-  Release Date: 2024-06-19
+  Installer Type: wix
+  Installer Url: https://download.videolan.org/pub/videolan/vlc/3.0.24/win64/vlc-3.0.24-win64.msi
+  Installer SHA256: 22172095ce4c2d5f5b600bb4c142d78105db29a77fa59a931941876f3b20f6d0
+  Release Date: 2026-09-21
+  Offline Distribution Supported: true
