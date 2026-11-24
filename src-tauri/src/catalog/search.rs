@@ -1,6 +1,6 @@
 //! Search query model plus the pure merge/dedupe/sort/paginate steps (SPEC §5.3).
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use serde::{Deserialize, Serialize};
 
@@ -83,24 +83,48 @@ impl SearchQuery {
     }
 }
 
-/// Dedupe key: name and publisher, lower-cased, letters and digits only.
-pub fn dedupe_key(summary: &PackageSummary) -> String {
+/// Cross-source dedupe key: name and publisher, lower-cased, letters and digits only.
+/// `None` when the publisher is empty (a winget search row has none): such a row is never
+/// dropped by the name rule.
+pub fn dedupe_key(summary: &PackageSummary) -> Option<String> {
     let norm = |s: &str| -> String {
         s.chars()
             .filter(|c| c.is_alphanumeric())
             .flat_map(char::to_lowercase)
             .collect()
     };
-    format!("{}|{}", norm(&summary.name), norm(&summary.publisher))
+    let publisher = norm(&summary.publisher);
+    if publisher.is_empty() {
+        return None;
+    }
+    Some(format!("{}|{}", norm(&summary.name), publisher))
 }
 
 /// Concatenates per-source results in the given (priority) order and drops later duplicates.
+///
+/// Inside one source a row is a duplicate only when `(source, id)` repeats. Across sources a
+/// row is a duplicate when an earlier source has the same `dedupe_key`.
 pub fn merge(per_source: Vec<Vec<PackageSummary>>) -> Vec<PackageSummary> {
-    let mut seen = HashSet::new();
+    let mut seen_ids = HashSet::new();
+    let mut seen_keys: HashMap<String, SourceKind> = HashMap::new();
     per_source
         .into_iter()
         .flatten()
-        .filter(|s| seen.insert(dedupe_key(s)))
+        .filter(|s| {
+            if !seen_ids.insert((s.source, s.id.clone())) {
+                return false;
+            }
+            let Some(key) = dedupe_key(s) else {
+                return true;
+            };
+            match seen_keys.get(&key) {
+                Some(first) => *first == s.source,
+                None => {
+                    seen_keys.insert(key, s.source);
+                    true
+                }
+            }
+        })
         .collect()
 }
 
@@ -180,6 +204,45 @@ mod tests {
         let other = named(SourceKind::Scoop, "ff", "Firefox", "Someone Else");
         let merged = merge(vec![vec![a.clone()], vec![dup, other.clone()]]);
         assert_eq!(merged, vec![a, other]);
+    }
+
+    #[test]
+    fn merge_keeps_same_name_rows_with_empty_publisher() {
+        let a = named(
+            SourceKind::WingetCommunity,
+            "Acme.Notes",
+            "Sample Notes",
+            "",
+        );
+        let b = named(
+            SourceKind::WingetCommunity,
+            "Beta.Notes",
+            "Sample Notes",
+            "",
+        );
+        assert_eq!(dedupe_key(&a), None);
+        let merged = merge(vec![vec![a.clone(), b.clone()]]);
+        assert_eq!(merged, vec![a, b]);
+    }
+
+    #[test]
+    fn merge_drops_a_repeated_id_inside_one_source() {
+        let a = named(SourceKind::WingetCommunity, "Acme.Notes", "Notes", "");
+        let merged = merge(vec![vec![a.clone(), a.clone()]]);
+        assert_eq!(merged, vec![a]);
+    }
+
+    #[test]
+    fn merge_applies_the_name_rule_across_sources_only_with_a_publisher() {
+        let a = named(SourceKind::WingetCommunity, "Acme.Notes", "Notes", "Acme");
+        let same = named(SourceKind::Scoop, "notes", "Notes", "ACME");
+        let no_pub = named(SourceKind::Scoop, "notes2", "Notes", "");
+        let merged = merge(vec![vec![a.clone()], vec![same, no_pub.clone()]]);
+        assert_eq!(merged, vec![a, no_pub]);
+        // Two rows of one source with the same name and a publisher both stay.
+        let x = named(SourceKind::Scoop, "x", "Tool", "Pub");
+        let y = named(SourceKind::Scoop, "y", "Tool", "Pub");
+        assert_eq!(merge(vec![vec![x.clone(), y.clone()]]), vec![x, y]);
     }
 
     #[test]
