@@ -1104,11 +1104,25 @@ Armoury Crate Service      ARP\\Machine\\X64\\Armoury Crate Service 6.7.6.0
 
     #[test]
     fn columns_skip_id_without_dot_cut_id_and_empty_version() {
-        let text = "Name   Id        Version\n----------------------\nFoo    nodot     1.0\nCut    A.Cut\u{2026}   1.0\nNoVer  C.NoVer\nOk     D.Ok      3\n";
+        let text = "Name   Id        Version\n----------------------\nFoo    nodot     1.0\nCut    A.Cut\u{2026}    1.0\nNoVer  C.NoVer\nOk     D.Ok      3\n";
         let c = parse_columns(text).unwrap();
         assert_eq!(c.rows.len(), 1);
         assert_eq!(c.rows[0].id, "D.Ok");
         assert_eq!(c.warnings.len(), 3);
+        // The cut id row is aligned, so the "id ends in an ellipsis" rule rejects it, not the
+        // wide-character check.
+        assert!(
+            c.warnings
+                .iter()
+                .any(|w| w.starts_with("row with unusable id skipped: Cut")),
+            "{:?}",
+            c.warnings
+        );
+        assert!(
+            !c.warnings.iter().any(|w| w.contains("misaligned")),
+            "{:?}",
+            c.warnings
+        );
     }
 
     #[test]
