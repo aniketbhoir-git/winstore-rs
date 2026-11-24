@@ -349,6 +349,10 @@ fn check_fixture(name: &str, actual: serde_json::Value) {
         .join("tests/fixtures/ipc")
         .join(name);
     if std::env::var("STORE_WRITE_FIXTURES").is_ok_and(|v| v == "1") {
+        assert!(
+            std::env::var_os("CI").is_none(),
+            "STORE_WRITE_FIXTURES=1 is refused when CI is set: CI must compare fixtures, never rewrite them"
+        );
         let text = serde_json::to_string_pretty(&actual).unwrap() + "\n";
         std::fs::write(&path, text).unwrap();
     }

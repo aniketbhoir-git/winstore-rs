@@ -96,7 +96,7 @@ if ($uiOk) {
 
 New-Item -ItemType Directory -Force -Path (Split-Path $report) | Out-Null
 $text = ($lines -join "`n") + "`n"
-Set-Content -Path $report -Value $text -Encoding utf8
+[System.IO.File]::WriteAllText($report, $text, (New-Object System.Text.UTF8Encoding($false)))
 Write-Host "`n--- test report ---`n$text"
 if ($env:GITHUB_STEP_SUMMARY) { Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "## Test report`n`n$text" }
 if ($failed) { exit 1 } else { exit 0 }
