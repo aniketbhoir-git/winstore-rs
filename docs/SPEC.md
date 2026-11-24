@@ -9,7 +9,7 @@
 > code is on branch `impl/6--install-loop` (PR #19, open). The spike of §6.6 is done
 > (`docs/spikes/2026-11-13-agreement-consent.md`); the maintainer selected case (c) for WP5 on 2026-11-13. The core
 > work of WP5 (step 2: case (c) of §6.6 and the WP5 rows of the gap table in §6.7) is built on
-> the branch. PR #19 can merge after the maintainer's review. Step 3 (the UI work) remains. Maintainer decision of
+> the branch. Step 3 (the UI work) is built on branch `impl/6--ui-step3` (second PR, 2026-11-25). Maintainer decision of
 > 2026-11-12: the UI part goes into a second pull request, after the approval of
 > `docs/designs/unattended-testing.md` (§7, WP5). Bug F1 (#20) does not gate PR #19; it gates the MVP
 > milestone (§7). WP6 to WP11 are not started. §7 gives the status of each work package.
@@ -667,9 +667,9 @@ call only.
   case (b).*
 - Add the "winget needs an agreement" row of §6.7 to the code. *Built on the branch.*
 - Set the content security policy and add the text-only test of "Trust boundary". *The policy
-  and its test are built on the branch. The text-only UI test is step 3.*
+  and its test are built on the branch. The text-only UI test is built (step 3).*
 - Add the consent dialog. The UI must read `error.code`; on the branch it reads only
-  `cancelled`. *Step 3 (the handler order). No dialog in case (c); case (b), F4.*
+  `cancelled`. *Handler order built (step 3). No dialog in case (c); case (b), F4.*
 - Update the `winget-executor` skill (hard rules, command lines, test list, state notes) to
   this section, in the same pull request. *Done on the branch (2026-11-13).*
 
@@ -904,7 +904,7 @@ this order:
 2. ✅ The core work, done on 2026-11-13: the parts of "Changes that WP5 owns" in §6.6 that
    are outside `ui/`, and the WP5 rows of the gap table in §6.7 (the cancel that cannot stop
    the tree, and the cancelled uninstall).
-3. The UI work: the handler order, the "no text" message, the disabled Cancel button, and the
+3. ✅ Built on branch `impl/6--ui-step3` (2026-11-25), second pull request. The UI work: the handler order, the "no text" message, the disabled Cancel button, and the
    UI tests of §6.6 with the tag (a, b, c). In case (c) there is no consent dialog. The UI has no test tool today. This step starts after
    `docs/designs/unattended-testing.md` is approved and its component-test level exists. It
    is a second pull request.
