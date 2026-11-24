@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use std::sync::OnceLock;
 
 /// The fake is a dev-only cargo example (never part of the app bundle). Build it
-/// once, then locate it next to this test binary (`target/<profile>/deps/..`).
+/// once and take its path from the build report.
 pub fn fake_exe() -> PathBuf {
     static EXE: OnceLock<PathBuf> = OnceLock::new();
     EXE.get_or_init(|| {
@@ -15,24 +15,27 @@ pub fn fake_exe() -> PathBuf {
             "build",
             "--example",
             "fake_winget",
+            "--message-format=json-render-diagnostics",
             "--manifest-path",
             manifest,
         ]);
         let test_exe = std::env::current_exe().expect("current_exe");
-        let profile_dir = test_exe
-            .parent()
-            .and_then(|d| d.parent())
-            .expect("profile dir");
-        if profile_dir.file_name().is_some_and(|n| n == "release") {
+        // Newer cargo keeps test binaries in a build directory apart from the
+        // final artifacts, so the profile is read from the path and the example
+        // is located from cargo's own report, not from the test binary's path.
+        if test_exe.components().any(|c| c.as_os_str() == "release") {
             cmd.arg("--release");
         }
-        let status = cmd.status().expect("run cargo build --example");
-        assert!(status.success(), "building fake_winget example failed");
-        let exe = profile_dir
-            .join("examples")
-            .join(format!("fake_winget{}", std::env::consts::EXE_SUFFIX));
-        assert!(exe.exists(), "missing {}", exe.display());
-        exe
+        cmd.stdout(std::process::Stdio::piped());
+        let out = cmd.output().expect("run cargo build --example");
+        assert!(out.status.success(), "building fake_winget example failed");
+        String::from_utf8_lossy(&out.stdout)
+            .lines()
+            .filter_map(|l| serde_json::from_str::<serde_json::Value>(l).ok())
+            .filter(|v| v["reason"] == "compiler-artifact" && v["target"]["name"] == "fake_winget")
+            .filter_map(|v| v["executable"].as_str().map(PathBuf::from))
+            .next_back()
+            .expect("cargo reported no fake_winget executable")
     })
     .clone()
 }
