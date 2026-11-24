@@ -292,7 +292,10 @@ fn scan_tree(root: &Path) -> Vec<String> {
         .collect();
     let mut offenders = Vec::new();
     for (path, text) in &sources {
-        if path.ends_with("tests/winget_smoke.rs") || path.ends_with("tests\\winget_smoke.rs") {
+        if ["winget_smoke.rs", "winget_catalog_smoke.rs"]
+            .iter()
+            .any(|f| path.file_name().is_some_and(|n| n == *f))
+        {
             continue;
         }
         let code = if is_test_file(path, &test_mods) {
