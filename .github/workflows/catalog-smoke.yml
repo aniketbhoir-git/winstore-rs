@@ -1,0 +1,53 @@
+name: Catalog smoke (real winget, manual)
+
+# Manual start only. Not part of the required `windows` check. Read-only: it searches and
+# shows packages, installs nothing, and passes no agreement flag.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  catalog-smoke:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    env:
+      STORE_CATALOG_ARTIFACTS: ${{ github.workspace }}\catalog-smoke-artifacts
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Make sure winget is present (runner only)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Continue'
+          if (-not (Get-Command winget -ErrorAction SilentlyContinue)) {
+            # The hosted image may lack winget. Official, free path from Microsoft:
+            # the Microsoft.WinGet.Client module and Repair-WinGetPackageManager, which
+            # installs App Installer (winget). This changes the runner only.
+            Write-Host 'winget not on PATH; bootstrapping with Microsoft.WinGet.Client'
+            Install-PackageProvider -Name NuGet -Force | Out-Null
+            Install-Module -Name Microsoft.WinGet.Client -Force -Repository PSGallery
+            Repair-WinGetPackageManager -AllUsers -Latest
+            $env:Path += ";$env:LOCALAPPDATA\Microsoft\WindowsApps"
+            "$env:LOCALAPPDATA\Microsoft\WindowsApps" | Out-File -Append -Encoding utf8 $env:GITHUB_PATH
+          }
+          winget --version
+          if ($LASTEXITCODE -ne 0) { Write-Error 'winget absent'; exit 1 }
+
+      - name: Real-winget catalog smoke
+        shell: pwsh
+        working-directory: src-tauri
+        run: cargo test --test winget_catalog_smoke -- --ignored --nocapture
+
+      - name: Upload raw output
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: catalog-smoke-raw
+          path: ${{ env.STORE_CATALOG_ARTIFACTS }}
+          if-no-files-found: warn

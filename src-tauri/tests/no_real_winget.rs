@@ -1,5 +1,5 @@
-//! Guard against real winget in tests: no test file except `winget_smoke.rs` may call
-//! the real-winget constructor. Others use `connect_at` with the subprocess fake.
+//! Guard against real winget in tests: no test file except `winget_smoke.rs` and
+//! `winget_catalog_smoke.rs` may call the real-winget constructor. Others use `connect_at` with the subprocess fake.
 
 use std::path::{Path, PathBuf};
 
@@ -30,7 +30,11 @@ fn only_winget_smoke_calls_real_winget_connect() {
     }));
     let offenders: Vec<_> = files
         .iter()
-        .filter(|p| !p.ends_with("winget_smoke.rs") && !p.ends_with("no_real_winget.rs"))
+        .filter(|p| {
+            !p.ends_with("winget_smoke.rs")
+                && !p.ends_with("winget_catalog_smoke.rs")
+                && !p.ends_with("no_real_winget.rs")
+        })
         .filter(|p| std::fs::read_to_string(p).unwrap().contains(&needle))
         .collect();
     assert!(
