@@ -3,3 +3,6 @@
 *.png binary
 *.ico binary
 *.icns binary
+
+# Recorded winget output: keep the exact bytes (CRLF), no line-ending conversion.
+src-tauri/tests/fixtures/winget/**/*.txt -text
