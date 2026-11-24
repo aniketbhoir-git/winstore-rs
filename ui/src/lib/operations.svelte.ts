@@ -18,6 +18,8 @@ export interface OpState {
   /** Set once the operation ended. */
   finished: boolean
   error: AppError | null
+  /** A progress event reported `cancel_failed`: the installer continues, Cancel is disabled. */
+  cancelFailed: boolean
 }
 
 /** One line of the live log tail. */
@@ -54,6 +56,10 @@ class Operations {
           // settled, so a terminal progress event must not reveal stale buttons.
           finished: false,
           error: prev && prev.operationId === e.operation_id ? prev.error : null,
+          // Read the flag, never the message text. Once set it stays for this operation.
+          cancelFailed:
+            e.cancel_failed === true ||
+            (!!prev && prev.operationId === e.operation_id && prev.cancelFailed),
         }
         this.addLine(e.package_id, {
           ts: e.timestamp,
@@ -65,6 +71,9 @@ class Operations {
       events.onOperationFinished((e) => {
         const cur = this.byPackage[e.package_id]
         if (!cur) return
+        // A late event of an earlier operation must not finish the current one. An empty id
+        // means the invoke reply has not arrived yet; the event then names the operation.
+        if (cur.operationId && cur.operationId !== e.operation_id) return
         this.byPackage[e.package_id] = {
           ...cur,
           operationId: e.operation_id,
@@ -107,6 +116,7 @@ class Operations {
       message: 'Running',
       finished: false,
       error: null,
+      cancelFailed: false,
     }
   }
 
@@ -132,6 +142,7 @@ class Operations {
       message: 'Starting',
       finished: false,
       error: null,
+      cancelFailed: false,
     }
     try {
       const { operation_id } = await begin()

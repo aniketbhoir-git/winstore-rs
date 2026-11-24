@@ -225,13 +225,13 @@ Fix these in `docs/SPEC.md` before more work packages start. Details are in the 
   config flag is removed, no builder passes an agreement flag, `agreements_required` carries
   the dialog data, and the policy `script-src 'self'` is set. The `consent` option and the
   consent dialog are not built; they are F4. SPEC §7, WP5, gives the order. The UI part
-  (step 3) blocks the close of #6.
+  (step 3) is built on `impl/6--ui-step3` (2026-11-25); #6 closes when that PR merges.
 - **A3:** ✅ spec text fixed on 2026-11-11: document status note, §3 differences, §5.4 command
   table, §7 status table, WP3 cancel text.
 - **A4:** ✅ transition tables in SPEC §6.7 on 2026-11-11, as built. The WP5 gaps are fixed on
   the branch (2026-11-13): a cancel that cannot stop the process tree emits one `cancel_failed`
   event, and a cancelled uninstall goes to the rest state. The UI part (disable Cancel) is
-  step 3 and blocks the close of #6.
+  built in step 3 (2026-11-25).
 - The repaired SPEC.md needs `/egm:egm-review docs/SPEC.md` before code starts on §6.6.
 - **A5:** headless mode needs a decision record before #11 starts.
 - **A6:** the msstore source is reached through winget only. Settle before #8 starts.
