@@ -24,6 +24,11 @@ and `docs/ISSUE-BACKLOG.md`. Issues #1 and #2 (scaffold, domain + persistence) a
   licensing/entitlement logic lives in this codebase.
 - **Headless mode (planned):** a localhost web UI to manage headless Windows Server boxes.
 
+## Known limits
+
+- Search and app details are tested on English Windows only. On another language the detail
+  page can show only the name, the id and the version.
+
 ## Stack
 
 Rust · Tauri 2 · Svelte/TypeScript · SQLite · tokio · windows-rs

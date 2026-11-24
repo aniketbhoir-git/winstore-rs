@@ -5,6 +5,7 @@
   import LogTail from '../components/LogTail.svelte'
   import Screenshots from '../components/Screenshots.svelte'
   import { api, events, toAppError } from '../lib/api'
+  import { readOnlyErrorText } from '../lib/errors'
   import { operations } from '../lib/operations.svelte'
   import type { AppError, InstallStatus, OperationLogEntry, PackageDetail } from '../lib/types'
 
@@ -26,12 +27,24 @@
         )
       : [],
   )
+  const description = $derived(
+    detail ? (detail.full_description || detail.summary.description).trim() : '',
+  )
   const live = $derived(operations.lines[id] ?? [])
   const size = $derived(
     detail?.installer.size_bytes != null
       ? `${(detail.installer.size_bytes / 1048576).toFixed(1)} MB`
       : null,
   )
+
+  /** Empty when winget gave no installer facts (e.g. a non-English Windows); then no row. */
+  const installerLine = $derived.by(() => {
+    if (!detail) return ''
+    const { install_type: type, architecture } = detail.installer
+    return [type && type !== 'unknown' ? type : null, architecture, size]
+      .filter((x): x is string => !!x)
+      .join(' · ')
+  })
 
   async function loadDetail() {
     loadError = null
@@ -74,11 +87,14 @@
 
   {#if loadError}
     <div class="state error" role="alert">
-      <p>{loadError.message}</p>
+      <p>{readOnlyErrorText(loadError)}</p>
       <button class="retry" onclick={loadDetail}>Try again</button>
     </div>
   {:else if !detail}
-    <p class="state">Loading…</p>
+    <div class="state loading" role="status">
+      <span class="spinner" aria-hidden="true"></span>
+      <p>Loading details from winget. The first time can take up to a minute.</p>
+    </div>
   {:else}
     <div class="top">
       <DetailHeader pkg={detail.summary} />
@@ -87,10 +103,12 @@
 
     <Screenshots urls={detail.screenshots} name={detail.summary.name} />
 
-    <section>
-      <h3>Description</h3>
-      <p class="text">{detail.full_description || detail.summary.description}</p>
-    </section>
+    {#if description}
+      <section>
+        <h3>Description</h3>
+        <p class="text">{description}</p>
+      </section>
+    {/if}
 
     {#if detail.release_notes}
       <section>
@@ -103,16 +121,13 @@
       <section>
         <h3>Information</h3>
         <dl>
-          <dt>Publisher</dt>
-          <dd>{detail.summary.publisher}</dd>
+          {#if detail.summary.publisher.trim()}
+            <dt>Publisher</dt>
+            <dd>{detail.summary.publisher}</dd>
+          {/if}
           {#if detail.license}<dt>License</dt><dd>{detail.license}</dd>{/if}
           {#if detail.website}<dt>Website</dt><dd class="url">{detail.website}</dd>{/if}
-          <dt>Installer</dt>
-          <dd>
-            {detail.installer.install_type}{detail.installer.architecture
-              ? ` · ${detail.installer.architecture}`
-              : ''}{size ? ` · ${size}` : ''}
-          </dd>
+          {#if installerLine}<dt>Installer</dt><dd>{installerLine}</dd>{/if}
           <dt>Package id</dt>
           <dd class="url">{detail.summary.id}</dd>
         </dl>
@@ -226,5 +241,32 @@
   }
   .error {
     color: var(--danger);
+  }
+  .loading {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.75rem;
+  }
+  .loading p {
+    margin: 0;
+  }
+  .spinner {
+    width: 1.75rem;
+    height: 1.75rem;
+    border: 3px solid var(--border);
+    border-top-color: var(--accent);
+    border-radius: 50%;
+    animation: spin 0.9s linear infinite;
+  }
+  @keyframes spin {
+    to {
+      transform: rotate(360deg);
+    }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .spinner {
+      animation-duration: 3s;
+    }
   }
 </style>

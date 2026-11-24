@@ -24,7 +24,7 @@
           {pkg.name}
         {/if}
       </h3>
-      <span class="publisher">{pkg.publisher}</span>
+      {#if pkg.publisher.trim()}<span class="publisher">{pkg.publisher}</span>{/if}
     </div>
   </div>
   <p class="desc">{pkg.description}</p>

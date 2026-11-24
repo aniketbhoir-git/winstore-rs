@@ -342,6 +342,11 @@ pub(crate) async fn drive(
             version.clone_from(&target);
         }
     }
+    let target = if result.is_ok() && op != Operation::Remove {
+        installed_version_or(core, id, op, target).await
+    } else {
+        target
+    };
     if let Err(e) = settle(&core.pool, id, op, target, &result).await {
         tracing::error!(package = %id, "could not update install ledger: {e}");
     }
@@ -357,6 +362,61 @@ pub(crate) async fn drive(
         },
     );
     result
+}
+
+/// SPEC §6.7 "Known gaps": after a successful install or update, the version that `winget list`
+/// reports is the one to record. The catalog target stands in (and one Warn row says why) when
+/// the list call fails or has no row for the package. A difference between the two is logged
+/// as a Warn row too.
+async fn installed_version_or(
+    core: &Core,
+    id: &PackageId,
+    op: Operation,
+    target: Option<String>,
+) -> Option<String> {
+    let native = PackageId::parse(id.as_str()).map(|(_, n)| n).ok();
+    let listed = match core.executor().await {
+        Ok(executor) => executor.list_installed().await,
+        Err(e) => Err(e),
+    };
+    let found = match (&listed, &native) {
+        (Ok(rows), Some(n)) => rows
+            .iter()
+            .find(|r| r.id.eq_ignore_ascii_case(n) && usable_version(&r.version))
+            .map(|r| r.version.trim().to_string()),
+        _ => None,
+    };
+    match found {
+        Some(v) => {
+            if target.as_deref().is_some_and(|t| t != v) {
+                let msg = format!(
+                    "installed version {v} differs from the catalog version {}; recorded {v}",
+                    target.as_deref().unwrap_or_default()
+                );
+                append_log(&core.pool, LogLevel::Warn, op, id, &msg).await;
+            }
+            Some(v)
+        }
+        None => {
+            let why = match &listed {
+                Err(e) => format!("winget list failed ({e})"),
+                Ok(_) => "winget list has no row for the package".to_string(),
+            };
+            let msg = format!(
+                "{why}; recorded the catalog version {}",
+                target.as_deref().unwrap_or("(none)")
+            );
+            append_log(&core.pool, LogLevel::Warn, op, id, &msg).await;
+            target
+        }
+    }
+}
+
+/// `winget list` prints `Unknown` (any case) or a range such as `< 1.0` when it cannot tell the
+/// version. Those are not versions: the row counts as missing.
+fn usable_version(v: &str) -> bool {
+    let v = v.trim();
+    !v.is_empty() && !v.eq_ignore_ascii_case("unknown") && !v.starts_with(['<', '>'])
 }
 
 /// Drains a started operation that the ledger refused: progress is still relayed, the outcome

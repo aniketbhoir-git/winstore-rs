@@ -3,6 +3,7 @@
   import AppCard from '../components/AppCard.svelte'
   import { api, events, toAppError } from '../lib/api'
   import { debounce } from '../lib/debounce'
+  import { readOnlyErrorText } from '../lib/errors'
   import type { AppError, PackageSummary } from '../lib/types'
 
   let { onopen }: { onopen?: (id: string) => void } = $props()
@@ -93,7 +94,7 @@
       <p class="state">Searching…</p>
     {:else if view.kind === 'error'}
       <div class="state error" role="alert">
-        <p>{view.error.message}</p>
+        <p>{readOnlyErrorText(view.error)}</p>
         {#if view.error.retryable}
           <button onclick={() => run(text)}>Try again</button>
         {/if}

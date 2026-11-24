@@ -17,7 +17,7 @@
   {/if}
   <div class="title">
     <h2>{pkg.name}</h2>
-    <span class="publisher">{pkg.publisher}</span>
+    {#if pkg.publisher.trim()}<span class="publisher">{pkg.publisher}</span>{/if}
     <div class="meta">
       <SourceBadge source={pkg.source} />
       {#if pkg.latest_version}<span class="version">v{pkg.latest_version}</span>{/if}
