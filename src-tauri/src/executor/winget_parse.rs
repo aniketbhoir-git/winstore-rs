@@ -362,10 +362,18 @@ pub fn map_exit(
         EXIT_PACKAGE_AGREEMENTS => AppError::AgreementsRequired {
             source_agreements: false,
             package_agreements: true,
+            winget_source: None,
+            version: None,
+            agreement_text: None,
+            agreement_url: None,
         },
         EXIT_SOURCE_AGREEMENTS => AppError::AgreementsRequired {
             source_agreements: true,
             package_agreements: false,
+            winget_source: None,
+            version: None,
+            agreement_text: None,
+            agreement_url: None,
         },
         EXIT_CTRL_SIGNAL | EXIT_APPTERMINATION | EXIT_CANCELLED_BY_USER => AppError::Cancelled,
         _ => {
@@ -706,14 +714,16 @@ mod tests {
             f(0x8A15_0041),
             ExitOutcome::Failure(AppError::AgreementsRequired {
                 source_agreements: false,
-                package_agreements: true
+                package_agreements: true,
+                ..
             })
         ));
         assert!(matches!(
             f(0x8A15_0046),
             ExitOutcome::Failure(AppError::AgreementsRequired {
                 source_agreements: true,
-                package_agreements: false
+                package_agreements: false,
+                ..
             })
         ));
         for c in [0x8A15_0005, 0x8A15_006A, 0x8A15_010C] {

@@ -3,7 +3,7 @@
   import InstallButton from './InstallButton.svelte'
   import SourceBadge from './SourceBadge.svelte'
 
-  let { pkg }: { pkg: PackageSummary } = $props()
+  let { pkg, onopen }: { pkg: PackageSummary; onopen?: (id: string) => void } = $props()
 
   const initial = $derived(pkg.name.trim().charAt(0).toUpperCase() || '?')
   const safeIcon = $derived(pkg.icon_url?.startsWith('https://') ? pkg.icon_url : null)
@@ -17,7 +17,13 @@
       <div class="placeholder" aria-hidden="true">{initial}</div>
     {/if}
     <div class="title">
-      <h3>{pkg.name}</h3>
+      <h3>
+        {#if onopen}
+          <button class="link" onclick={() => onopen(pkg.id)}>{pkg.name}</button>
+        {:else}
+          {pkg.name}
+        {/if}
+      </h3>
       <span class="publisher">{pkg.publisher}</span>
     </div>
   </div>
@@ -69,6 +75,20 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+  }
+  .link {
+    all: unset;
+    cursor: pointer;
+    color: inherit;
+  }
+  .link:hover {
+    color: var(--accent);
+    text-decoration: underline;
+  }
+  .link:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+    border-radius: 2px;
   }
   .publisher,
   .version,

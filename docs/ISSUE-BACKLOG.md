@@ -170,3 +170,82 @@ Suggested order: **#1 → #2 → (#3 ∥ #4) → #5 → #6 (MVP)** — everythin
 - **Acceptance:** elevation path works; scheduled scan produces a toast; import replays a
   manifest list.
 - **LLM note:** `tier:max` (Windows platform APIs).
+---
+
+## Review follow-ups (2026-11-11)
+
+Source: `docs/reviews/2026-11-11-spec-review.md` (action ids A1 to A25) and a manual test of
+the `impl/6--install-loop` build. These items have no GitHub issue yet unless a number is given.
+Design work on them uses the Elephant-Goldfish Model; see `CLAUDE.md`, "Design workflow".
+
+### F1 — Search returns unrelated results (bug, blocks the MVP) — GitHub #20
+- **Labels:** `tier:max`, `size:M`, `area:catalog`
+- **Relates to:** #16 (fresher catalog source), review action A14
+- **Symptom:** a search for "vlc" in the UI shows unrelated apps.
+- **Cause:** upstream. `GET https://api.winget.run/v2/packages?query=vlc&take=5` returns Flock
+  and f.lux. The rows were last updated in 2023. `sources/winget_repo.rs` passes the query
+  correctly and trusts the order the service returns. The cache in `catalog/mod.rs` then keeps
+  those rows for the TTL.
+- **Decision needed first:** the community catalog backend. Options to compare in a decision
+  record: `winget search` and `winget show` through the existing executor; the official winget
+  source index; another REST mirror. Close #16 with that record.
+- **Acceptance:** a search for "vlc" returns `VideoLAN.VLC` in the first 3 results. A search
+  for a string with no match returns an empty list. An automated test covers both and does
+  not depend on a live third-party service.
+
+### F2 — Automated, unattended testing for contributors (requirement, needs a design) — GitHub #21
+- **Labels:** `tier:max`, `size:L`, `area:infra`
+- **Relates to:** SPEC §8, review action A20
+- **Requirement (maintainer, 2026-11-11):** all testing runs with no person present. A
+  contributor who gives model tokens to the project can run the same tests with one command
+  and get a pass or fail result.
+- **State today:** `cargo test` (unit, HTTP mock, fake winget) runs unattended in CI. The
+  real-winget smoke test `tests/winget_smoke.rs` is `#[ignore]` and needs owner approval. No
+  UI test and no end-to-end job exist. Manual checks in SPEC §8 have no automated form.
+- **Open design questions:**
+  1. Where do real installs run? A contributor machine must not get software installed on it
+     by a test. Options: CI runner only; Windows Sandbox; a disposable VM.
+  2. How does a test drive the UI? Options: WebDriver through `tauri-driver`; UI tests against
+     a mocked IPC layer; handler-level tests only.
+  3. How do pull requests from forks run the end-to-end job without access to secrets?
+  4. Which checks gate a merge, and which run on a schedule?
+  5. What does the one command look like, and what report does it write?
+- **Next step:** a design document in `docs/designs/`, reviewed before any code.
+
+### F3 — Review blockers on the spec
+Fix these in `docs/SPEC.md` before more work packages start. Details are in the review file.
+- **A1:** ✅ spec text fixed on 2026-11-11 (§6.3, §5.2). The code was safe.
+- **A2:** ✅ consent model defined in SPEC §6.6, revised on 2026-11-12 after the EGM review
+  (`docs/reviews/2026-11-11-spec-review-2/`). Spike done on 2026-11-13; WP5 builds case (c)
+  (no consent, no flag); case (b) is F4. The app stores no consent; a flag goes to winget
+  for one operation after a user "Accept". Case (c) is built on the branch (2026-11-13): the
+  config flag is removed, no builder passes an agreement flag, `agreements_required` carries
+  the dialog data, and the policy `script-src 'self'` is set. The `consent` option and the
+  consent dialog are not built; they are F4. SPEC §7, WP5, gives the order. The UI part
+  (step 3) blocks the close of #6.
+- **A3:** ✅ spec text fixed on 2026-11-11: document status note, §3 differences, §5.4 command
+  table, §7 status table, WP3 cancel text.
+- **A4:** ✅ transition tables in SPEC §6.7 on 2026-11-11, as built. The WP5 gaps are fixed on
+  the branch (2026-11-13): a cancel that cannot stop the process tree emits one `cancel_failed`
+  event, and a cancelled uninstall goes to the rest state. The UI part (disable Cancel) is
+  step 3 and blocks the close of #6.
+- The repaired SPEC.md needs `/egm:egm-review docs/SPEC.md` before code starts on §6.6.
+- **A5:** headless mode needs a decision record before #11 starts.
+- **A6:** the msstore source is reached through winget only. Settle before #8 starts.
+
+Decided on 2026-11-11 — **A7 (phases):** the SPEC §7 order is the schedule. Update-all follows
+the MVP and headless stays in Phase 3. `docs/STRATEGY.md` §1.2 and §1.3 now agree.
+
+### F4 — Agreement consent with the link fallback (case (b) of SPEC §6.6, later) — no GitHub issue yet
+Decided on 2026-11-13: WP5 builds case (c), and case (b) follows later. The spike
+(`docs/spikes/2026-11-13-agreement-consent.md`) found that winget agreements have a label and a
+link, and no text. Until F4 is done, Store does not install a package that needs an agreement
+(for example `Microsoft.PowerBI` and msstore apps), and an msstore operation fails on a machine
+that never accepted the msstore source agreement.
+- Scope: the case (b) row of SPEC §6.6. The `consent` option on `start_install`, and on
+  `start_uninstall` with the source kind only (spike question 3). A parser for the winget
+  agreement block (label, text, URL). `agreement_url` and `agreement_text` in the error. The
+  consent dialog with the link. `license_url` on `PackageDetail`. The tests tagged (a, b).
+- Fix `ProgressParser::agreements_shown()`: it matches the install notice that winget prints for
+  every install, not an agreement (spike E7).
+- Needs: PR #19 merged, and the UI test level of `docs/designs/unattended-testing.md`.

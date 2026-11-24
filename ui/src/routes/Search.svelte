@@ -5,6 +5,8 @@
   import { debounce } from '../lib/debounce'
   import type { AppError, PackageSummary } from '../lib/types'
 
+  let { onopen }: { onopen?: (id: string) => void } = $props()
+
   const DEBOUNCE_MS = 300
 
   type View =
@@ -101,7 +103,7 @@
     {:else}
       <ul class="grid">
         {#each view.results as pkg (pkg.id)}
-          <li><AppCard {pkg} /></li>
+          <li><AppCard {pkg} {onopen} /></li>
         {/each}
       </ul>
     {/if}

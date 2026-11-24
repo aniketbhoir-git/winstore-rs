@@ -5,6 +5,7 @@ pub mod domain;
 pub mod error;
 pub mod executor;
 pub mod ipc;
+pub mod services;
 pub mod sources;
 
 use tauri::Manager;
@@ -34,6 +35,9 @@ pub fn run() {
             commands::get_app_detail,
             commands::start_install,
             commands::cancel_install,
+            commands::start_uninstall,
+            commands::get_install_status,
+            commands::get_operation_log,
             commands::check_updates,
             commands::update_all,
             commands::open_store_page,
