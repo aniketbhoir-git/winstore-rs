@@ -71,6 +71,9 @@ class Operations {
       events.onOperationFinished((e) => {
         const cur = this.byPackage[e.package_id]
         if (!cur) return
+        // A late event of an earlier operation must not finish the current one. An empty id
+        // means the invoke reply has not arrived yet; the event then names the operation.
+        if (cur.operationId && cur.operationId !== e.operation_id) return
         this.byPackage[e.package_id] = {
           ...cur,
           operationId: e.operation_id,
