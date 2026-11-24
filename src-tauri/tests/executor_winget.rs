@@ -211,6 +211,29 @@ exit 0
 }
 
 #[tokio::test]
+async fn failure_after_a_piped_install_keeps_the_terminal_event_indeterminate() {
+    let script = format!(
+        "file {}
+exit 1
+",
+        fixture("install-piped.txt")
+    );
+    let fx = Fx::new(&script);
+    let h = fx
+        .cli
+        .install(&pkg("Vendor.SomeApp"), &InstallRequest::default())
+        .await
+        .unwrap();
+    let (events, outcome) = collect(h).await;
+    assert!(outcome.is_err());
+    assert_one_terminal_last(&events);
+    let last = events.last().unwrap();
+    assert_eq!(last.stage, OperationStage::Failed);
+    assert!(last.indeterminate, "{last:#?}");
+    assert!(last.fraction < 1.0);
+}
+
+#[tokio::test]
 async fn install_with_a_bar_is_not_indeterminate_once_the_bar_shows() {
     let fx = Fx::new(FULL_INSTALL);
     let h = fx

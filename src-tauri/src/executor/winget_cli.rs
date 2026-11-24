@@ -946,6 +946,8 @@ struct Driven {
     /// `Ok(true)` = winget had nothing to do.
     result: AppResult<bool>,
     fraction: f32,
+    /// No bar was seen; a Failed or Cancelled terminal event keeps this value.
+    indeterminate: bool,
 }
 
 async fn read_bounded(mut r: impl AsyncRead + Unpin) -> String {
@@ -1070,10 +1072,12 @@ where
     };
 
     let fraction = parser.fraction();
+    let indeterminate = parser.indeterminate();
     if cancelled {
         return Driven {
             result: Err(AppError::Cancelled),
             fraction,
+            indeterminate,
         };
     }
     let status = match status {
@@ -1082,6 +1086,7 @@ where
             return Driven {
                 result: Err(AppError::Io(e)),
                 fraction,
+                indeterminate,
             }
         }
     };
@@ -1100,7 +1105,11 @@ where
         ExitOutcome::NoOp => Ok(true),
         ExitOutcome::Failure(e) => Err(e),
     };
-    Driven { result, fraction }
+    Driven {
+        result,
+        fraction,
+        indeterminate,
+    }
 }
 
 /// Sends the single terminal event, logs, releases the guard and reports the outcome.
@@ -1119,15 +1128,27 @@ async fn finish(
         *winget_source = Some(ctx.winget_source.clone());
         *version = ctx.version.clone();
     }
-    let (stage, fraction, message) = match &driven.result {
-        Ok(false) => (OperationStage::Done, 1.0, "done".to_string()),
-        Ok(true) => (OperationStage::Done, 1.0, "already up to date".to_string()),
+    // Done is a measured 1.0; Failed and Cancelled keep the last fraction and its flag.
+    let (stage, fraction, message, indeterminate) = match &driven.result {
+        Ok(false) => (OperationStage::Done, 1.0, "done".to_string(), false),
+        Ok(true) => (
+            OperationStage::Done,
+            1.0,
+            "already up to date".to_string(),
+            false,
+        ),
         Err(AppError::Cancelled) => (
             OperationStage::Cancelled,
             driven.fraction,
             "cancelled".to_string(),
+            driven.indeterminate,
         ),
-        Err(e) => (OperationStage::Failed, driven.fraction, e.to_string()),
+        Err(e) => (
+            OperationStage::Failed,
+            driven.fraction,
+            e.to_string(),
+            driven.indeterminate,
+        ),
     };
     match &driven.result {
         Ok(_) => {
@@ -1170,7 +1191,7 @@ async fn finish(
     // A slot is always free (see `progress`); this only fails if the receiver is gone.
     let _ = ctx
         .tx
-        .send(ctx.event(stage, fraction, &message, false))
+        .send(ctx.event(stage, fraction, &message, indeterminate))
         .await;
     ctx.inner
         .cancels

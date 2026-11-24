@@ -44,24 +44,23 @@
     transition: width 0.2s ease;
   }
   .indeterminate .fill {
-    position: absolute;
     width: 35%;
     transition: none;
     animation: slide 1.4s ease-in-out infinite;
   }
   @keyframes slide {
     from {
-      left: -35%;
+      transform: translateX(-100%);
     }
     to {
-      left: 100%;
+      transform: translateX(285%);
     }
   }
   /* Reduced motion: a still, full-width, dimmed bar says "working" without moving. */
   @media (prefers-reduced-motion: reduce) {
     .indeterminate .fill {
       animation: none;
-      left: 0;
+      transform: none;
       width: 100%;
       opacity: 0.5;
     }
