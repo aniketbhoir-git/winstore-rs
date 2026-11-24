@@ -16,6 +16,8 @@
   let loadError = $state<AppError | null>(null)
   let status = $state<InstallStatus | null>(null)
   let history = $state<OperationLogEntry[]>([])
+  /** True from `store:operation-finished` until the ledger is reloaded (no stale buttons). */
+  let settling = $state(false)
 
   const versions = $derived(
     detail
@@ -59,7 +61,9 @@
     void loadDetail()
     void refresh()
     const sub = events.onOperationFinished((e) => {
-      if (e.package_id === id) void refresh()
+      if (e.package_id !== id) return
+      settling = true
+      void refresh().finally(() => (settling = false))
     })
     return () => void sub.then((f) => f())
   })
@@ -78,7 +82,7 @@
   {:else}
     <div class="top">
       <DetailHeader pkg={detail.summary} />
-      <DetailActions pkg={detail.summary} {versions} {status} />
+      <DetailActions pkg={detail.summary} {versions} {status} {settling} />
     </div>
 
     <Screenshots urls={detail.screenshots} name={detail.summary.name} />

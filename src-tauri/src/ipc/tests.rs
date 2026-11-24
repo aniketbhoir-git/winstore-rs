@@ -208,10 +208,7 @@ async fn update_all_continues_when_the_ledger_refuses_one_package() {
         source: KIND,
         is_auto: false,
     };
-    let mut exec = FakeExec::scripted(vec![
-        (vec![OperationStage::Cancelled], Err(AppError::Cancelled)),
-        (vec![OperationStage::Done], Ok(())),
-    ]);
+    let mut exec = FakeExec::scripted(vec![(vec![OperationStage::Done], Ok(()))]);
     exec.updates = vec![mk("A.A"), mk("B.B")];
     let exec = Arc::new(exec);
     let (state, pool) = state_with(false, false, shared_exec_factory(exec.clone())).await;
@@ -229,8 +226,9 @@ async fn update_all_continues_when_the_ledger_refuses_one_package() {
         (summary.total, summary.succeeded, summary.failed),
         (2, 1, 1)
     );
-    // The refused update was cancelled, the pinned row is untouched, B.B still went through.
-    assert_eq!(exec.cancelled.lock().unwrap().as_slice(), ["op-1"]);
+    // The pinned package never reached the executor, its row is untouched, B.B still went through.
+    assert_eq!(exec.next.load(Ordering::SeqCst), 1);
+    assert!(exec.cancelled.lock().unwrap().is_empty());
     let a = installs::get(&pool, &pinned).await.unwrap().unwrap();
     assert_eq!(a.state, InstallState::Pinned);
     assert_eq!(a.installed_version.as_deref(), Some("1.0.0"));
@@ -362,6 +360,37 @@ fn check_fixture(name: &str, actual: serde_json::Value) {
     );
 }
 
+#[tokio::test]
+async fn update_all_never_starts_the_executor_for_a_pinned_row() {
+    let mut exec = FakeExec::scripted(vec![]);
+    exec.updates = vec![UpdateAvailable {
+        package_id: id(),
+        installed_version: "1.0.0".into(),
+        latest_version: "2.0.0".into(),
+        source: KIND,
+        is_auto: false,
+    }];
+    let exec = Arc::new(exec);
+    let (state, pool) = state_with(false, false, shared_exec_factory(exec.clone())).await;
+    let mut rec = crate::domain::InstallRecord::new(id(), KIND);
+    rec.state = InstallState::Pinned;
+    rec.pinned = true;
+    rec.installed_version = Some("1.0.0".into());
+    installs::upsert(&pool, &rec).await.unwrap();
+
+    let summary = run_update_all(&state, Arc::new(RecordingSink::default()))
+        .await
+        .unwrap();
+    assert_eq!((summary.total, summary.failed), (1, 1));
+    // No operation was ever created (the empty script would have panicked), nothing cancelled.
+    assert_eq!(exec.next.load(Ordering::SeqCst), 0);
+    assert!(exec.cancelled.lock().unwrap().is_empty());
+    assert_eq!(
+        installs::get(&pool, &id()).await.unwrap().unwrap().state,
+        InstallState::Pinned
+    );
+}
+
 #[test]
 fn fixture_error_agreements_required() {
     let err = AppError::AgreementsRequired {
@@ -419,4 +448,38 @@ fn fixture_event_search_results() {
         "event_search_results.json",
         serde_json::to_value(&ev).unwrap(),
     );
+}
+
+#[test]
+fn version_strings_are_validated() {
+    let opts = |v: &str| InstallOptions {
+        version: Some(v.into()),
+        scope: None,
+    };
+    for ok in ["1.2.3", "2024.1_beta+build-5", "v1"] {
+        assert_eq!(
+            opts(ok).into_request().unwrap().version.as_deref(),
+            Some(ok)
+        );
+    }
+    // Blank means "latest".
+    assert_eq!(opts("  ").into_request().unwrap().version, None);
+    let long = "1".repeat(65);
+    for bad in [
+        "--force",
+        "-1",
+        "1 2",
+        "1;2",
+        "1
+2",
+        "1=2",
+        "ü",
+        long.as_str(),
+    ] {
+        assert_eq!(
+            opts(bad).into_request().unwrap_err().code(),
+            "invalid_config",
+            "{bad}"
+        );
+    }
 }

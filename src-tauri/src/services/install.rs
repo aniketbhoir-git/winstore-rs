@@ -230,7 +230,7 @@ fn busy_state(op: Operation) -> InstallState {
 }
 
 /// Refuses an operation the ledger cannot take, before any process starts.
-async fn check_ledger(core: &Core, id: &PackageId, op: Operation) -> AppResult<()> {
+pub(crate) async fn check_ledger(core: &Core, id: &PackageId, op: Operation) -> AppResult<()> {
     if let Some(a) = core.active.get(id) {
         return Err(AppError::Unsupported(format!(
             "another operation ({}) is already running for {id}",
