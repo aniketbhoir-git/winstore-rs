@@ -690,3 +690,98 @@ async fn package_is_free_only_after_the_ledger_is_settled() {
     }
     panic!("package never became free");
 }
+
+// SPEC §6.7 "Known gaps": the recorded version comes from `winget list` after a success.
+fn listed(id: &str, version: &str) -> crate::executor::InstalledPackage {
+    crate::executor::InstalledPackage {
+        id: id.into(),
+        name: "Foo Bar".into(),
+        version: version.into(),
+        available: None,
+        source: Some(KIND),
+    }
+}
+
+async fn install_ok(exec: Arc<FakeExec>) -> (DbPool, Vec<OperationLogEntry>) {
+    let (core, pool, sink) = setup(exec).await;
+    start_install(&core, sink_of(&sink), id(), InstallRequest::default())
+        .await
+        .unwrap();
+    assert_eq!(finished(&sink, 1).await["ok"], true);
+    let log = log_tail(&pool, &id(), 50).await.unwrap();
+    (pool, log)
+}
+
+fn ok_script() -> Vec<Script> {
+    vec![(vec![OperationStage::Done], Ok(()))]
+}
+
+#[tokio::test]
+async fn install_records_the_version_from_winget_list() {
+    let exec = Arc::new(FakeExec::scripted(ok_script()));
+    // The id case differs on purpose; the catalog version is 1.2.3.
+    *exec.installed.lock().unwrap() =
+        vec![listed("other.app", "9.9"), listed("foo.bar", "1.2.3.4")];
+    let (pool, log) = install_ok(exec).await;
+    let rec = ledger(&pool).await;
+    assert_eq!(rec.state, InstallState::Installed);
+    assert_eq!(rec.installed_version.as_deref(), Some("1.2.3.4"));
+    assert!(log
+        .iter()
+        .any(|e| e.level == LogLevel::Warn && e.message.contains("differs")));
+}
+
+#[tokio::test]
+async fn install_with_the_same_listed_version_writes_no_warning() {
+    let exec = Arc::new(FakeExec::scripted(ok_script()));
+    *exec.installed.lock().unwrap() = vec![listed("Foo.Bar", "1.2.3")];
+    let (pool, log) = install_ok(exec).await;
+    assert_eq!(
+        ledger(&pool).await.installed_version.as_deref(),
+        Some("1.2.3")
+    );
+    assert!(log.iter().all(|e| e.level != LogLevel::Warn));
+}
+
+#[tokio::test]
+async fn install_keeps_the_catalog_version_when_winget_list_fails() {
+    let exec = Arc::new(FakeExec::scripted(ok_script()));
+    exec.list_fails
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+    let (pool, log) = install_ok(exec).await;
+    let rec = ledger(&pool).await;
+    assert_eq!(rec.state, InstallState::Installed);
+    assert_eq!(rec.installed_version.as_deref(), Some("1.2.3"));
+    assert!(log
+        .iter()
+        .any(|e| e.level == LogLevel::Warn && e.message.contains("winget list failed")));
+}
+
+#[tokio::test]
+async fn install_keeps_the_catalog_version_when_winget_list_has_no_row() {
+    let exec = Arc::new(FakeExec::scripted(ok_script()));
+    *exec.installed.lock().unwrap() = vec![listed("Other.App", "9.9")];
+    let (pool, log) = install_ok(exec).await;
+    assert_eq!(
+        ledger(&pool).await.installed_version.as_deref(),
+        Some("1.2.3")
+    );
+    assert!(log
+        .iter()
+        .any(|e| e.level == LogLevel::Warn && e.message.contains("no row")));
+}
+
+#[tokio::test]
+async fn failed_install_does_not_read_winget_list() {
+    let exec = Arc::new(FakeExec::scripted(vec![(
+        vec![OperationStage::Failed],
+        Err(AppError::DeploymentFailed("x".into())),
+    )]));
+    *exec.installed.lock().unwrap() = vec![listed("Foo.Bar", "7.7")];
+    let (core, pool, sink) = setup(exec).await;
+    start_install(&core, sink_of(&sink), id(), InstallRequest::default())
+        .await
+        .unwrap();
+    assert_eq!(finished(&sink, 1).await["ok"], false);
+    assert_eq!(ledger(&pool).await.installed_version, None);
+}

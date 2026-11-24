@@ -80,6 +80,10 @@ pub(crate) struct FakeExec {
     pub next: AtomicU32,
     /// When set, `cancel` fails and leaves the operation running.
     pub cancel_fails: AtomicBool,
+    /// What `list_installed` returns (the `winget list` rows).
+    pub installed: Mutex<Vec<InstalledPackage>>,
+    /// When set, `list_installed` fails.
+    pub list_fails: AtomicBool,
 }
 
 impl FakeExec {
@@ -198,7 +202,11 @@ impl PackageExecutor for FakeExec {
         Box::pin(async move { Ok(self.handle(p, Operation::Remove)) })
     }
     fn list_installed<'a>(&'a self) -> ExecFuture<'a, Vec<InstalledPackage>> {
-        Box::pin(async { Ok(vec![]) })
+        if self.list_fails.load(Ordering::SeqCst) {
+            return Box::pin(async { Err(AppError::DeploymentFailed("list failed".into())) });
+        }
+        let rows = self.installed.lock().unwrap().clone();
+        Box::pin(async move { Ok(rows) })
     }
     fn list_updates<'a>(&'a self) -> ExecFuture<'a, Vec<UpdateAvailable>> {
         let u = self.updates.clone();
