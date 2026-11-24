@@ -5,6 +5,9 @@ on:
     branches: [main]
   pull_request:
 
+permissions:
+  contents: read
+
 jobs:
   windows:
     runs-on: windows-latest
@@ -21,20 +24,6 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: src-tauri
-      - name: Build UI
-        working-directory: ui
-        run: |
-          npm ci
-          npm run build
-      - name: Format
-        working-directory: src-tauri
-        run: cargo fmt --all -- --check
-      - name: Clippy
-        working-directory: src-tauri
-        run: cargo clippy --all-targets --all-features -- -D warnings
-      - name: Build
-        working-directory: src-tauri
-        run: cargo build --locked
-      - name: Test
-        working-directory: src-tauri
-        run: cargo test --locked
+      - name: Tests (L1 Rust; the same script a contributor runs)
+        shell: pwsh
+        run: ./scripts/test.ps1
