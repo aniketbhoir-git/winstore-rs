@@ -21,23 +21,33 @@ jobs:
         with:
           workspaces: src-tauri
 
-      - name: Make sure winget is present (runner only)
+      - name: Make sure winget 1.29 or newer is present (runner only)
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Continue'
-          if (-not (Get-Command winget -ErrorAction SilentlyContinue)) {
-            # The hosted image may lack winget. Official, free path from Microsoft:
-            # the Microsoft.WinGet.Client module and Repair-WinGetPackageManager, which
-            # installs App Installer (winget). This changes the runner only.
-            Write-Host 'winget not on PATH; bootstrapping with Microsoft.WinGet.Client'
+          function Get-WingetVersion {
+            if (-not (Get-Command winget -ErrorAction SilentlyContinue)) { return $null }
+            $v = (winget --version) -replace '^v', '' -replace '-.*$', ''
+            try { return [version]$v } catch { return $null }
+          }
+          $have = Get-WingetVersion
+          Write-Host "winget on the runner: $have"
+          if ($null -eq $have -or $have -lt [version]'1.29') {
+            # The hosted image may lack winget or carry an old one (v1.11.510 on
+            # 2026-11-25). Official, free path from Microsoft: the Microsoft.WinGet.Client
+            # module and Repair-WinGetPackageManager, which installs the latest App
+            # Installer (winget). This changes the runner only.
+            Write-Host 'winget missing or older than 1.29; updating with Microsoft.WinGet.Client'
             Install-PackageProvider -Name NuGet -Force | Out-Null
             Install-Module -Name Microsoft.WinGet.Client -Force -Repository PSGallery
-            Repair-WinGetPackageManager -AllUsers -Latest
-            $env:Path += ";$env:LOCALAPPDATA\Microsoft\WindowsApps"
+            Repair-WinGetPackageManager -AllUsers -Latest -Force
+            $env:Path = "$env:LOCALAPPDATA\Microsoft\WindowsApps;$env:Path"
             "$env:LOCALAPPDATA\Microsoft\WindowsApps" | Out-File -Append -Encoding utf8 $env:GITHUB_PATH
           }
           winget --version
           if ($LASTEXITCODE -ne 0) { Write-Error 'winget absent'; exit 1 }
+          $now = Get-WingetVersion
+          if ($null -eq $now -or $now -lt [version]'1.29') { Write-Error "winget $now is older than 1.29"; exit 1 }
 
       - name: Real-winget catalog smoke
         shell: pwsh
