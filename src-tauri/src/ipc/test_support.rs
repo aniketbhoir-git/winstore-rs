@@ -84,6 +84,8 @@ pub(crate) struct FakeExec {
     pub installed: Mutex<Vec<InstalledPackage>>,
     /// When set, `list_installed` fails.
     pub list_fails: AtomicBool,
+    /// How often `list_installed` was called.
+    pub list_calls: AtomicU32,
 }
 
 impl FakeExec {
@@ -202,6 +204,7 @@ impl PackageExecutor for FakeExec {
         Box::pin(async move { Ok(self.handle(p, Operation::Remove)) })
     }
     fn list_installed<'a>(&'a self) -> ExecFuture<'a, Vec<InstalledPackage>> {
+        self.list_calls.fetch_add(1, Ordering::SeqCst);
         if self.list_fails.load(Ordering::SeqCst) {
             return Box::pin(async { Err(AppError::DeploymentFailed("list failed".into())) });
         }

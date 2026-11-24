@@ -778,10 +778,87 @@ async fn failed_install_does_not_read_winget_list() {
         Err(AppError::DeploymentFailed("x".into())),
     )]));
     *exec.installed.lock().unwrap() = vec![listed("Foo.Bar", "7.7")];
-    let (core, pool, sink) = setup(exec).await;
+    let (core, pool, sink) = setup(exec.clone()).await;
     start_install(&core, sink_of(&sink), id(), InstallRequest::default())
         .await
         .unwrap();
     assert_eq!(finished(&sink, 1).await["ok"], false);
     assert_eq!(ledger(&pool).await.installed_version, None);
+    assert_eq!(exec.list_calls.load(std::sync::atomic::Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
+async fn unknown_or_range_listed_versions_count_as_no_row() {
+    for bad in ["Unknown", "unknown", "< 1.0", ">2.0", "  "] {
+        let exec = Arc::new(FakeExec::scripted(ok_script()));
+        *exec.installed.lock().unwrap() = vec![listed("Foo.Bar", bad)];
+        let (pool, log) = install_ok(exec).await;
+        assert_eq!(
+            ledger(&pool).await.installed_version.as_deref(),
+            Some("1.2.3"),
+            "{bad:?}"
+        );
+        assert!(
+            log.iter()
+                .any(|e| e.level == LogLevel::Warn && e.message.contains("no row")),
+            "{bad:?}"
+        );
+    }
+}
+
+/// Runs an update through `begin` and `drive`, as `update_all` does.
+async fn run_update(exec: Arc<FakeExec>, script: Script) -> (DbPool, Vec<OperationLogEntry>) {
+    exec.push(script);
+    let (core, pool, sink) = setup(exec.clone()).await;
+    seed(&pool, InstallState::Installed, Some("1.0"), false).await;
+    let handle = crate::executor::PackageExecutor::update(exec.as_ref(), &id())
+        .await
+        .unwrap();
+    begin(
+        &core,
+        &id(),
+        Operation::Update,
+        Some("2.0".into()),
+        Some("1.0"),
+    )
+    .await
+    .unwrap();
+    track(&core, &id(), &handle, Operation::Update);
+    drive(
+        &core,
+        &sink_of(&sink),
+        handle,
+        &id(),
+        Operation::Update,
+        Some("2.0".into()),
+    )
+    .await
+    .unwrap();
+    (pool.clone(), log_tail(&pool, &id(), 50).await.unwrap())
+}
+
+#[tokio::test]
+async fn update_records_the_version_from_winget_list() {
+    let exec = Arc::new(FakeExec::default());
+    *exec.installed.lock().unwrap() = vec![listed("Foo.Bar", "2.0.1")];
+    let (pool, log) = run_update(exec, (vec![OperationStage::Done], Ok(()))).await;
+    let rec = ledger(&pool).await;
+    assert_eq!(rec.state, InstallState::Installed);
+    assert_eq!(rec.installed_version.as_deref(), Some("2.0.1"));
+    assert!(log
+        .iter()
+        .any(|e| e.level == LogLevel::Warn && e.message.contains("differs")));
+}
+
+// "Already up to date" ends as a successful no-op (exit 0x8A15002B maps to Ok); the list
+// still gives the real version.
+#[tokio::test]
+async fn up_to_date_update_keeps_the_listed_version() {
+    let exec = Arc::new(FakeExec::default());
+    *exec.installed.lock().unwrap() = vec![listed("Foo.Bar", "1.0")];
+    let (pool, _) = run_update(exec, (vec![OperationStage::Done], Ok(()))).await;
+    assert_eq!(
+        ledger(&pool).await.installed_version.as_deref(),
+        Some("1.0")
+    );
 }

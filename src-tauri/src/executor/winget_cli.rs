@@ -36,6 +36,8 @@ use crate::error::{AppError, AppResult};
 pub const PATH_OVERRIDE_ENV: &str = "STORE_WINGET_PATH";
 
 const CAPTURE_TIMEOUT: Duration = Duration::from_secs(120);
+/// Limit of `winget list`; the install service waits for it after each success (SPEC §6.7).
+const LIST_TIMEOUT: Duration = Duration::from_secs(30);
 const PROBE_TIMEOUT: Duration = Duration::from_secs(15);
 /// Time limit of one `winget search` call (design catalog-winget-cli, section 2).
 pub const SEARCH_TIMEOUT: Duration = Duration::from_secs(15);
@@ -829,7 +831,7 @@ impl WingetCli {
 
     pub async fn query_installed(&self) -> AppResult<Vec<InstalledPackage>> {
         let args = list_installed_args();
-        let out = self.run_capture(&args).await?;
+        let out = self.run_capture_timeout(&args, LIST_TIMEOUT).await?;
         if out.code as u32 == EXIT_NO_APPLICATIONS_FOUND {
             return Ok(Vec::new());
         }

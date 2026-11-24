@@ -382,7 +382,7 @@ async fn installed_version_or(
     let found = match (&listed, &native) {
         (Ok(rows), Some(n)) => rows
             .iter()
-            .find(|r| r.id.eq_ignore_ascii_case(n) && !r.version.trim().is_empty())
+            .find(|r| r.id.eq_ignore_ascii_case(n) && usable_version(&r.version))
             .map(|r| r.version.trim().to_string()),
         _ => None,
     };
@@ -410,6 +410,13 @@ async fn installed_version_or(
             target
         }
     }
+}
+
+/// `winget list` prints `Unknown` (any case) or a range such as `< 1.0` when it cannot tell the
+/// version. Those are not versions: the row counts as missing.
+fn usable_version(v: &str) -> bool {
+    let v = v.trim();
+    !v.is_empty() && !v.eq_ignore_ascii_case("unknown") && !v.starts_with(['<', '>'])
 }
 
 /// Drains a started operation that the ledger refused: progress is still relayed, the outcome
