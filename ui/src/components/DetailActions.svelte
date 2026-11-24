@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { agreementUrl, errorText, isValidVersion } from '../lib/errors'
   import { operations } from '../lib/operations.svelte'
   import type { InstallStatus, PackageSummary } from '../lib/types'
   import BuyInStoreButton from './BuyInStoreButton.svelte'
@@ -30,6 +31,8 @@
       ledger === 'pinned' ||
       (ledger === 'failed' && !!status?.installed_version),
   )
+  // The backend refuses other versions (`validate_version`); do not offer them.
+  const offered = $derived(versions.filter(isValidVersion))
   const verb = $derived(op?.operation === 'remove' ? 'Uninstalling' : 'Installing')
 
   function install() {
@@ -46,7 +49,9 @@
         fraction={op.fraction}
         label={`${verb}: ${op.stage}${op.message ? ' · ' + op.message : ''}`}
       />
-      <button class="secondary" disabled={!op.operationId} onclick={() => operations.cancel(pkg.id)}>
+      <button class="secondary" disabled={!op.operationId || op.cancelFailed}
+        title={op.cancelFailed ? 'Cancel did not stop the installer' : undefined}
+        onclick={() => operations.cancel(pkg.id)}>
         Cancel
       </button>
     </div>
@@ -59,12 +64,12 @@
         </span>
         <button class="secondary" onclick={() => operations.uninstall(pkg.id)}>Uninstall</button>
       {:else}
-        {#if versions.length > 1}
+        {#if offered.length > 1}
           <label>
             <span class="sr">Version</span>
             <select bind:value={version}>
               <option value="">Latest{pkg.latest_version ? ` (${pkg.latest_version})` : ''}</option>
-              {#each versions as v (v)}<option value={v}>{v}</option>{/each}
+              {#each offered as v (v)}<option value={v}>{v}</option>{/each}
             </select>
           </label>
         {/if}
@@ -73,7 +78,8 @@
     </div>
     {#if op?.error}
       <p class="error" role="alert">
-        {op.operation === 'remove' ? 'Uninstall' : 'Install'} did not finish: {op.error.message}
+        {op.operation === 'remove' ? 'Uninstall' : 'Install'} did not finish: {errorText(op.error)}
+        {#if agreementUrl(op.error)}<span class="url">{agreementUrl(op.error)}</span>{/if}
       </p>
     {:else if op?.stage === 'cancelled'}
       <p class="note">{op.operation === 'remove' ? 'Uninstall' : 'Install'} cancelled.</p>
@@ -146,6 +152,10 @@
     margin: 0;
     font-size: 0.8rem;
     color: var(--danger);
+  }
+  .url {
+    display: block;
+    overflow-wrap: anywhere;
   }
   .note {
     margin: 0;
