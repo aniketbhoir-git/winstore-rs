@@ -47,6 +47,7 @@
     <div class="progress">
       <ProgressBar
         fraction={op.fraction}
+        indeterminate={op.indeterminate}
         label={`${verb}: ${op.stage}${op.message ? ' · ' + op.message : ''}`}
       />
       <button class="secondary" disabled={!op.operationId || op.cancelFailed}

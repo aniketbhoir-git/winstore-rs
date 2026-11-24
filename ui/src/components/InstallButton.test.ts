@@ -82,6 +82,25 @@ describe('InstallButton', () => {
     expect(bar.getAttribute('aria-valuenow')).toBe('50')
   })
 
+  it('shows an indeterminate bar and the stage text for an indeterminate event', async () => {
+    const calls = mockBackend({ start_install: () => ({ operation_id: 'op-1' }) })
+    mountButton()
+    await fireEvent.click(screen.getByRole('button', { name: 'Install' }))
+    await waitFor(() => expect(calls).toHaveLength(1))
+    await emit('store:progress', {
+      ...eventProgress,
+      indeterminate: true,
+      message: 'Successfully verified installer hash',
+    })
+    const bar = await screen.findByRole('progressbar', { name: /verified installer hash/ })
+    expect(bar.getAttribute('aria-valuenow')).toBeNull()
+    expect(bar.getAttribute('aria-busy')).toBe('true')
+    // A later event with a real bar returns to a measured value.
+    await emit('store:progress', { ...eventProgress, indeterminate: false, fraction: 0.5 })
+    const measured = await screen.findByRole('progressbar', { name: /downloading/i })
+    expect(measured.getAttribute('aria-valuenow')).toBe('50')
+  })
+
   it('makes no backend call when the user clicks Installed', async () => {
     const calls = mockBackend({ start_install: () => ({ operation_id: 'op-1' }) })
     mountButton()

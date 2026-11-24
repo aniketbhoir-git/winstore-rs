@@ -112,6 +112,8 @@ pub struct ProgressUpdate {
     pub stage: OperationStage,
     pub fraction: f32,
     pub message: String,
+    /// True while no download bar was seen: the fraction is a stage estimate only.
+    pub indeterminate: bool,
 }
 
 const TAIL_LINES: usize = 100;
@@ -133,6 +135,7 @@ fn stage_rank(s: OperationStage) -> u8 {
 pub struct ProgressParser {
     stage: OperationStage,
     fraction: f32,
+    bar_seen: bool,
     installer_exit_code: Option<i32>,
     agreements_shown: bool,
     tail: VecDeque<String>,
@@ -149,6 +152,7 @@ impl ProgressParser {
         ProgressParser {
             stage: OperationStage::Resolving,
             fraction: 0.0,
+            bar_seen: false,
             installer_exit_code: None,
             agreements_shown: false,
             tail: VecDeque::new(),
@@ -157,6 +161,12 @@ impl ProgressParser {
 
     pub fn fraction(&self) -> f32 {
         self.fraction
+    }
+
+    /// True until a download bar (sizes or percent) was seen. winget 1.29.240+ prints none to
+    /// a pipe, so the fraction is then only a stage estimate.
+    pub fn indeterminate(&self) -> bool {
+        !self.bar_seen
     }
 
     pub fn installer_exit_code(&self) -> Option<i32> {
@@ -205,6 +215,7 @@ impl ProgressParser {
             return Some((Downloading, 0.10));
         }
         if let Some(ratio) = parse_bar(line) {
+            self.bar_seen = true;
             return Some((Downloading, 0.10 + 0.50 * ratio));
         }
         if line.starts_with("Successfully verified installer hash") {
@@ -249,6 +260,7 @@ impl ProgressParser {
             stage: new_stage,
             fraction: new_fraction,
             message: line.to_string(),
+            indeterminate: !self.bar_seen,
         })
     }
 
@@ -801,6 +813,43 @@ mod tests {
     fn feed_all(lines: &[&str]) -> Vec<ProgressUpdate> {
         let mut p = ProgressParser::new();
         lines.iter().filter_map(|l| p.feed_line(l)).collect()
+    }
+
+    #[test]
+    fn piped_1_29_layout_has_no_bar_and_stays_indeterminate() {
+        use OperationStage::*;
+        let ups = feed_all(&[
+            "Found Some App [Vendor.SomeApp] Version 1.2.3",
+            "Downloading https://example.invalid/installer.exe",
+            "Successfully verified installer hash",
+            "Starting package install...",
+            "Successfully installed",
+        ]);
+        let got: Vec<_> = ups.iter().map(|u| u.stage).collect();
+        assert_eq!(
+            got,
+            [Resolving, Downloading, Installing, Installing, Finalizing]
+        );
+        assert!(ups.iter().all(|u| u.indeterminate), "{ups:#?}");
+    }
+
+    #[test]
+    fn a_bar_line_ends_indeterminate_for_the_rest_of_the_operation() {
+        let mut p = ProgressParser::new();
+        assert!(p.indeterminate());
+        assert!(
+            p.feed_line("Downloading https://x.invalid/a.exe")
+                .unwrap()
+                .indeterminate
+        );
+        let bar = p.feed_line("  ████▒▒▒▒  2.00 MB / 8.00 MB").unwrap();
+        assert!(!bar.indeterminate);
+        assert!(
+            !p.feed_line("Successfully verified installer hash")
+                .unwrap()
+                .indeterminate
+        );
+        assert!(!p.indeterminate());
     }
 
     #[test]

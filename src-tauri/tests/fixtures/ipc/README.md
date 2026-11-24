@@ -7,6 +7,6 @@ the Rust test until the file is updated (`STORE_WRITE_FIXTURES=1 cargo test fixt
 | File | Used by |
 |---|---|
 | `error_agreements_required.json` | `ui/src/components/InstallButton.test.ts` |
-| `event_progress.json` | `ui/src/components/InstallButton.test.ts` |
+| `event_progress.json` | `ui/src/components/InstallButton.test.ts`. Includes `indeterminate` (false here; the UI tests set it true for the winget 1.29.240+ no-bar case). |
 | `event_operation_finished.json` | `ui/src/components/InstallButton.test.ts` |
 | `event_search_results.json` | For WP5 step 3 (search page tests). Checked by Rust only until then. |

@@ -92,6 +92,8 @@ export interface ProgressEvent {
   operation: OperationKind
   stage: OperationStage
   fraction: number
+  /** True when winget showed no bar: `fraction` is only a stage estimate (SPEC §4.2). */
+  indeterminate?: boolean
   message: string
   timestamp: number
   /** True when a cancel could not stop the installer tree (SPEC §6.7 gap table). */
