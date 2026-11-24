@@ -204,7 +204,7 @@ Non-goals:
 | Install/remove engine | winget CLI invoked as a subprocess for install/update/remove |
 | Logging | tracing; operation log mirrored into SQLite |
 | Minimum Windows version | Windows 11 23H2 (build 22631). Maintainer decision of 2026-11-12: the minimum is the version on the maintainer devices. Only one device was read; a lower build on another device lowers this value. |
-| Minimum winget version | 1.29. Same decision. The code and the `winget-executor` skill say 1.6.0 today; the ADR 0001 work changes the version check. |
+| Minimum winget version | 1.29. Same decision. The code and the `winget-executor` skill check 1.29 (built in #20 step 2). |
 
 Rationale: winget handles installer execution, hash checks, agreements, dependencies and MSIX
 deployment. The app wraps it and does not write installer logic.

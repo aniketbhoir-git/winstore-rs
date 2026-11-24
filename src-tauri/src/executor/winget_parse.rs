@@ -9,10 +9,10 @@ use std::fmt;
 use crate::domain::OperationStage;
 use crate::error::AppError;
 
-/// Oldest winget this project supports (project choice; see the skill).
+/// Oldest winget this project supports (SPEC 2; 1.29 prints full columns to a pipe).
 pub const MIN_VERSION: WingetVersion = WingetVersion {
     major: 1,
-    minor: 6,
+    minor: 29,
     patch: 0,
 };
 
@@ -394,6 +394,225 @@ pub fn map_exit(
 }
 
 // ---------------------------------------------------------------------------------------------
+// `winget search` columns and `winget show` blocks (catalog, ADR 0001)
+// ---------------------------------------------------------------------------------------------
+
+/// One data row of a `winget search` table, cells taken by column position.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SearchRow {
+    /// Position 0.
+    pub name: String,
+    /// Position 1. Always contains a `.`.
+    pub id: String,
+    /// Position 2.
+    pub version: String,
+    /// Position 3 and later (Match, Source); unused.
+    pub extra: Vec<String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Columns {
+    pub rows: Vec<SearchRow>,
+    /// True when winget printed the cut-list footer (a line that starts with `<`).
+    pub truncated: bool,
+    pub warnings: Vec<String>,
+}
+
+fn is_separator(line: &str) -> bool {
+    let t = line.trim();
+    t.len() >= 10 && t.chars().all(|c| c == '-')
+}
+
+/// Char offsets where a column starts: offset 0 and every non-space char after a space.
+fn column_starts(header: &[char]) -> Vec<usize> {
+    let mut starts = vec![0];
+    for i in 1..header.len() {
+        if !header[i].is_whitespace() && header[i - 1].is_whitespace() {
+            starts.push(i);
+        }
+    }
+    starts
+}
+
+/// Parses a `winget search` table by column position. Header words are never read: the header
+/// is the line above the first dash line. `None` when there is no dash line (or no header).
+pub fn parse_columns(text: &str) -> Option<Columns> {
+    let lines: Vec<&str> = text
+        .split(['\r', '\n'])
+        .filter(|l| !l.trim().is_empty() && !is_spinner(l))
+        .collect();
+    let sep = lines.iter().position(|l| is_separator(l))?;
+    let header: Vec<char> = lines.get(sep.checked_sub(1)?)?.chars().collect();
+    let starts = column_starts(&header);
+    if starts.len() < 3 {
+        return None;
+    }
+    let mut out = Columns::default();
+    for line in &lines[sep + 1..] {
+        if line.starts_with('<') {
+            out.truncated = true;
+            break;
+        }
+        let chars: Vec<char> = line.chars().collect();
+        // Wide characters shift offsets: a column start must follow padding.
+        if starts
+            .iter()
+            .any(|&st| st > 0 && st < chars.len() && !chars[st - 1].is_whitespace())
+        {
+            out.warnings
+                .push(format!("misaligned row skipped (wide characters?): {line}"));
+            continue;
+        }
+        let cells: Vec<String> = starts
+            .iter()
+            .enumerate()
+            .map(|(i, &st)| {
+                let start = st.min(chars.len());
+                let end = starts
+                    .get(i + 1)
+                    .map_or(chars.len(), |&e| e.min(chars.len()));
+                chars[start..end.max(start)]
+                    .iter()
+                    .collect::<String>()
+                    .trim()
+                    .to_string()
+            })
+            .collect();
+        let id = &cells[1];
+        if id.is_empty() || id.contains(' ') || !id.contains('.') || id.ends_with('\u{2026}') {
+            out.warnings
+                .push(format!("row with unusable id skipped: {line}"));
+            continue;
+        }
+        if cells[2].is_empty() {
+            out.warnings
+                .push(format!("row without version skipped: {line}"));
+            continue;
+        }
+        let mut it = cells.into_iter();
+        out.rows.push(SearchRow {
+            name: it.next().unwrap_or_default(),
+            id: it.next().unwrap_or_default(),
+            version: it.next().unwrap_or_default(),
+            extra: it.collect(),
+        });
+    }
+    Some(out)
+}
+
+/// Fields of a `winget show` block that the catalog uses (English keys).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ShowBlock {
+    pub name: String,
+    pub id: String,
+    pub version: Option<String>,
+    pub publisher: Option<String>,
+    /// Lines joined with `\n`.
+    pub description: Option<String>,
+    pub homepage: Option<String>,
+    pub license: Option<String>,
+    pub release_notes: Option<String>,
+    pub tags: Vec<String>,
+    pub installer_type: Option<String>,
+    pub installer_url: Option<String>,
+    pub installer_sha256: Option<String>,
+    pub release_date: Option<String>,
+}
+
+impl ShowBlock {
+    fn set(&mut self, key: &str, value: &str) {
+        let v = (!value.is_empty()).then(|| value.to_string());
+        match key {
+            "Version" => self.version = v,
+            "Publisher" => self.publisher = v,
+            "Description" => self.description = v,
+            "Homepage" => self.homepage = v,
+            "License" => self.license = v,
+            "Release Notes" => self.release_notes = v,
+            "Installer Type" => self.installer_type = v,
+            "Installer Url" => self.installer_url = v,
+            "Installer SHA256" => self.installer_sha256 = v,
+            "Release Date" => self.release_date = v,
+            _ => {}
+        }
+    }
+
+    /// Appends a continuation line to a multi-line text field.
+    fn append(&mut self, key: &str, line: &str) {
+        let slot = match key {
+            "Description" => &mut self.description,
+            "Release Notes" => &mut self.release_notes,
+            _ => return,
+        };
+        match slot {
+            Some(s) => {
+                s.push('\n');
+                s.push_str(line);
+            }
+            None => *slot = Some(line.to_string()),
+        }
+    }
+}
+
+/// Splits `Key: value` at the first colon; the key must look like a key.
+fn split_key(line: &str) -> Option<(&str, &str)> {
+    let (k, v) = line.split_once(':')?;
+    let k = k.trim();
+    (!k.is_empty() && !k.contains("//") && k.len() <= 40).then_some((k, v.trim()))
+}
+
+/// Parses `winget show --id <id>` output. `None` when no title line ends with `[<id>]`.
+pub fn parse_show(text: &str, id: &str) -> Option<ShowBlock> {
+    let suffix = format!("[{id}]").to_lowercase();
+    let lines: Vec<&str> = text
+        .split(['\r', '\n'])
+        .filter(|l| !l.trim().is_empty() && !is_spinner(l))
+        .collect();
+    let title_at = lines
+        .iter()
+        .position(|l| l.trim_end().to_lowercase().ends_with(&suffix))?;
+    let title = lines[title_at].trim_end();
+    // `to_lowercase` can change byte lengths for odd characters; cut by chars from the end.
+    let keep = title.chars().count().saturating_sub(suffix.chars().count());
+    let before: String = title.chars().take(keep).collect();
+    let name = before
+        .trim_end()
+        .split_once(char::is_whitespace)
+        .map_or("", |(_, rest)| rest)
+        .trim()
+        .to_string();
+    let mut block = ShowBlock {
+        name,
+        id: id.to_string(),
+        ..ShowBlock::default()
+    };
+    let mut current: Option<&str> = None;
+    for line in &lines[title_at + 1..] {
+        let indented = line.starts_with([' ', '\t']);
+        let t = line.trim();
+        if !indented {
+            current = None;
+            if let Some((k, v)) = split_key(t) {
+                block.set(k, v);
+                current = Some(k);
+            }
+            continue;
+        }
+        match current {
+            Some("Tags") => block.tags.push(t.to_string()),
+            Some("Installer") => {
+                if let Some((k, v)) = split_key(t) {
+                    block.set(k, v);
+                }
+            }
+            Some(k) => block.append(k, t),
+            None => {}
+        }
+    }
+    Some(block)
+}
+
+// ---------------------------------------------------------------------------------------------
 // Tables (`winget list`, `winget upgrade`)
 // ---------------------------------------------------------------------------------------------
 
@@ -528,13 +747,15 @@ mod tests {
         let v = WingetVersion::parse("v1.29.380").unwrap();
         assert_eq!((v.major, v.minor, v.patch), (1, 29, 380));
         assert_eq!(WingetVersion::parse("1.6\r\n").unwrap().patch, 0);
+        assert!(WingetVersion::parse("v1.28.240").unwrap() < MIN_VERSION);
+        assert!(WingetVersion::parse("v1.29.0").unwrap() >= MIN_VERSION);
         assert_eq!(
             WingetVersion::parse("v1.7.10861-preview").unwrap().patch,
             10861
         );
         assert!(WingetVersion::parse("garbage").is_none());
         assert!(WingetVersion::parse("v1.5.9999").unwrap() < MIN_VERSION);
-        assert!(WingetVersion::parse("v1.6.0").unwrap() >= MIN_VERSION);
+        assert!(WingetVersion::parse("v1.6.0").unwrap() < MIN_VERSION);
         assert!(WingetVersion::parse("v2.0.0").unwrap() >= MIN_VERSION);
     }
 
@@ -830,5 +1051,119 @@ Armoury Crate Service      ARP\\Machine\\X64\\Armoury Crate Service 6.7.6.0
                 .rows
                 .is_empty()
         );
+    }
+
+    // -- search columns and show blocks ------------------------------------------------------
+
+    const SEARCH_VLC: &str = include_str!("../../tests/fixtures/winget/1.29/search-vlc.txt");
+    const SEARCH_SAME: &str = include_str!("../../tests/fixtures/winget/1.29/search-same-name.txt");
+    const SEARCH_NONE: &str = include_str!("../../tests/fixtures/winget/1.29/search-none.txt");
+    const SHOW_VLC: &str = include_str!("../../tests/fixtures/winget/1.29/show-vlc.txt");
+
+    #[test]
+    fn columns_parse_recorded_vlc_search() {
+        let c = parse_columns(SEARCH_VLC).unwrap();
+        assert!(c.warnings.is_empty(), "{:?}", c.warnings);
+        assert!(!c.truncated);
+        assert_eq!(c.rows.len(), 4);
+        let first = &c.rows[0];
+        assert_eq!(first.name, "VLC media player");
+        assert_eq!(first.id, "VideoLAN.VLC");
+        assert_eq!(first.version, "3.0.21");
+        assert_eq!(first.extra, vec!["Moniker: vlc".to_string()]);
+        assert_eq!(c.rows[1].name, "VLC media player Nightly");
+        assert_eq!(c.rows[1].version, "4.0.0-dev");
+    }
+
+    #[test]
+    fn columns_without_match_column() {
+        let text = "Name     Id        Version\n----------------------\nFoo      A.Foo     1.0\nBar Baz  B.Bar     2.0\n";
+        let c = parse_columns(text).unwrap();
+        assert_eq!(c.rows.len(), 2);
+        assert_eq!(c.rows[1].name, "Bar Baz");
+        assert!(c.rows[0].extra.is_empty());
+    }
+
+    #[test]
+    fn columns_footer_stops_rows_and_sets_truncated() {
+        let c = parse_columns(SEARCH_SAME).unwrap();
+        assert!(c.truncated);
+        assert_eq!(c.rows.len(), 3);
+        assert_eq!(c.rows[0].name, c.rows[1].name);
+        assert_ne!(c.rows[0].id, c.rows[1].id);
+        assert!(c.warnings.is_empty(), "{:?}", c.warnings);
+    }
+
+    #[test]
+    fn columns_footer_is_not_a_row_even_with_a_dot() {
+        let text = "Name   Id        Version\n----------------------\nFoo    A.Foo     1.0\n<more. entries cut>\nBar    B.Bar     2.0\n";
+        let c = parse_columns(text).unwrap();
+        assert!(c.truncated);
+        assert_eq!(c.rows.len(), 1);
+    }
+
+    #[test]
+    fn columns_skip_id_without_dot_cut_id_and_empty_version() {
+        let text = "Name   Id        Version\n----------------------\nFoo    nodot     1.0\nCut    A.Cut\u{2026}   1.0\nNoVer  C.NoVer\nOk     D.Ok      3\n";
+        let c = parse_columns(text).unwrap();
+        assert_eq!(c.rows.len(), 1);
+        assert_eq!(c.rows[0].id, "D.Ok");
+        assert_eq!(c.warnings.len(), 3);
+    }
+
+    #[test]
+    fn columns_skip_wide_character_row() {
+        // winget pads by display width: four CJK chars take eight cells but four chars.
+        let text = "Name       Id        Version\n---------------------------\n\u{4e2d}\u{6587}\u{540d}\u{79f0}     A.Wide    1.0\nPlain      B.Plain   2.0\n";
+        let c = parse_columns(text).unwrap();
+        assert_eq!(c.rows.len(), 1);
+        assert_eq!(c.rows[0].id, "B.Plain");
+        assert_eq!(c.warnings.len(), 1);
+    }
+
+    #[test]
+    fn columns_none_without_separator_or_header() {
+        assert!(parse_columns(SEARCH_NONE).is_none());
+        assert!(parse_columns("").is_none());
+        assert!(parse_columns("----------------------\nFoo A.Foo 1\n").is_none());
+    }
+
+    #[test]
+    fn columns_ignore_spinner_noise_and_cr() {
+        let text = format!("-\r\\\r|\r{}", SEARCH_VLC.replace('\n', "\r\n"));
+        assert_eq!(parse_columns(&text).unwrap().rows.len(), 4);
+    }
+
+    #[test]
+    fn show_parses_recorded_vlc() {
+        let b = parse_show(SHOW_VLC, "videolan.vlc").unwrap();
+        assert_eq!(b.name, "VLC media player");
+        assert_eq!(b.version.as_deref(), Some("3.0.21"));
+        assert_eq!(b.publisher.as_deref(), Some("VideoLAN"));
+        assert_eq!(b.homepage.as_deref(), Some("https://www.videolan.org/vlc/"));
+        assert_eq!(b.license.as_deref(), Some("GPL-2.0-or-later"));
+        assert_eq!(b.tags, ["audio", "media", "player", "video"]);
+        assert_eq!(b.installer_type.as_deref(), Some("nullsoft"));
+        assert!(b.installer_url.as_deref().unwrap().ends_with("win64.exe"));
+        assert_eq!(b.installer_sha256.as_deref().map(str::len), Some(64));
+        assert_eq!(b.release_date.as_deref(), Some("2024-06-19"));
+        assert_eq!(b.release_notes, None);
+    }
+
+    #[test]
+    fn show_joins_multi_line_description() {
+        let b = parse_show(SHOW_VLC, "VideoLAN.VLC").unwrap();
+        let d = b.description.unwrap();
+        assert!(d.starts_with("VLC is a free and open source"));
+        assert!(d.ends_with("\nIt also plays network streams and converts media files."));
+    }
+
+    #[test]
+    fn show_ignores_unknown_keys_and_missing_title_is_none() {
+        let text = "Found Foo [A.Foo]\nVersion: 1\nMystery: x\nPublisher: P\n";
+        let b = parse_show(text, "A.Foo").unwrap();
+        assert_eq!(b.publisher.as_deref(), Some("P"));
+        assert!(parse_show(text, "Other.Id").is_none());
+        assert!(parse_show("No package found matching input criteria.", "A.Foo").is_none());
     }
 }

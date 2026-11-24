@@ -10,6 +10,7 @@
 //! `out TEXT`     print TEXT + "\r\n"      (escapes: `\r` `\n` `\\`)
 //! `raw TEXT`     print TEXT with no line ending (same escapes)
 //! `hex AABB..`   print raw bytes
+//! `file PATH`    print the bytes of the file as they are (no escapes)
 //! `err TEXT`     print TEXT + "\r\n" to stderr
 //! `sleep MS`     sleep
 //! `exit CODE`    exit with CODE (decimal or 0x hex; u32 HRESULTs allowed)
@@ -100,6 +101,12 @@ fn main() {
                 let bytes: Vec<u8> = (0..clean.len() / 2)
                     .map(|i| u8::from_str_radix(&clean[i * 2..i * 2 + 2], 16).unwrap())
                     .collect();
+                let mut o = stdout.lock();
+                o.write_all(&bytes).unwrap();
+                o.flush().unwrap();
+            }
+            "file" => {
+                let bytes = std::fs::read(rest.trim()).expect("file directive");
                 let mut o = stdout.lock();
                 o.write_all(&bytes).unwrap();
                 o.flush().unwrap();

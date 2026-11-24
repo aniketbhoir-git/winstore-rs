@@ -1,0 +1,6 @@
+Name                          Id                                Version       Match
+------------------------------------------------------------------------------------------------
+VLC media player              VideoLAN.VLC                      3.0.21        Moniker: vlc
+VLC media player Nightly      VideoLAN.VLC.Nightly              4.0.0-dev     Tag: vlc
+VLC Subtitle Helper           Example.VlcSubtitleHelper         1.4.2         Tag: vlc
+Playlist Tools for VLC        Example.VlcPlaylistTools          0.9.1         Tag: vlc

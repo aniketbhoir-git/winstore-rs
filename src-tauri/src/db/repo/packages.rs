@@ -7,8 +7,10 @@ const UPSERT_SUMMARY: &str = "INSERT INTO packages (source, package_id, name, pu
     latest_version, description, icon_url, rating, rating_count, is_paid, packaging, \
     detail_json, fetched_at, detail_fetched_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) \
     ON CONFLICT(source, package_id) DO UPDATE SET name = excluded.name, \
-    publisher = excluded.publisher, latest_version = excluded.latest_version, \
-    description = excluded.description, icon_url = excluded.icon_url, \
+    publisher = COALESCE(NULLIF(excluded.publisher, ''), publisher), \
+    latest_version = excluded.latest_version, \
+    description = COALESCE(NULLIF(excluded.description, ''), description), \
+    icon_url = excluded.icon_url, \
     rating = excluded.rating, rating_count = excluded.rating_count, \
     is_paid = excluded.is_paid, packaging = excluded.packaging, \
     fetched_at = excluded.fetched_at";
@@ -196,6 +198,33 @@ mod tests {
             .await
             .unwrap()
             .is_none());
+    }
+
+    #[tokio::test]
+    async fn search_row_with_empty_fields_keeps_stored_publisher_and_description() {
+        let pool = test_pool().await;
+        let detail = fixtures::detail(SourceKind::WingetCommunity, "A.B", "Name");
+        upsert_detail(&pool, &detail, 100).await.unwrap();
+        let mut row = detail.summary.clone();
+        row.publisher.clear();
+        row.description.clear();
+        row.latest_version = "2.0".into();
+        upsert_summary(&pool, &row, 200).await.unwrap();
+        let got = get_summary(&pool, SourceKind::WingetCommunity, "A.B")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(got.publisher, detail.summary.publisher);
+        assert_eq!(got.description, detail.summary.description);
+        assert_eq!(got.latest_version, "2.0");
+        // A non-empty new value replaces the stored one.
+        row.publisher = "New Publisher".into();
+        upsert_summary(&pool, &row, 300).await.unwrap();
+        let got = get_summary(&pool, SourceKind::WingetCommunity, "A.B")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(got.publisher, "New Publisher");
     }
 
     #[tokio::test]
