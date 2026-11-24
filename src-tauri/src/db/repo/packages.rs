@@ -6,13 +6,13 @@ use crate::error::AppResult;
 const UPSERT_SUMMARY: &str = "INSERT INTO packages (source, package_id, name, publisher, \
     latest_version, description, icon_url, rating, rating_count, is_paid, packaging, \
     detail_json, fetched_at, detail_fetched_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) \
-    ON CONFLICT(source, package_id) DO UPDATE SET name = excluded.name, \
+    ON CONFLICT(source, package_id) DO UPDATE SET name = COALESCE(NULLIF(excluded.name, ''), name), \
     publisher = COALESCE(NULLIF(excluded.publisher, ''), publisher), \
     latest_version = excluded.latest_version, \
     description = COALESCE(NULLIF(excluded.description, ''), description), \
     icon_url = excluded.icon_url, \
     rating = excluded.rating, rating_count = excluded.rating_count, \
-    is_paid = excluded.is_paid, packaging = excluded.packaging, \
+    is_paid = excluded.is_paid, packaging = CASE WHEN excluded.packaging = 'unknown' THEN packaging \n    ELSE excluded.packaging END, \
     fetched_at = excluded.fetched_at";
 
 /// `detail_fetched_at` is `Some` only for a detail write; a summary write keeps the old one.
@@ -225,6 +225,33 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(got.publisher, "New Publisher");
+    }
+
+    #[tokio::test]
+    async fn search_row_with_unknown_packaging_or_empty_name_keeps_stored_values() {
+        let pool = test_pool().await;
+        let detail = fixtures::detail(SourceKind::WingetCommunity, "A.B", "Stored Name");
+        upsert_detail(&pool, &detail, 100).await.unwrap();
+        let mut row = detail.summary.clone();
+        row.name.clear();
+        row.packaging = crate::domain::PackagingKind::Unknown;
+        upsert_summary(&pool, &row, 200).await.unwrap();
+        let got = get_summary(&pool, SourceKind::WingetCommunity, "A.B")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(got.name, "Stored Name");
+        assert_eq!(got.packaging, detail.summary.packaging);
+        // A known packaging and a non-empty name replace the stored ones.
+        row.name = "Renamed".into();
+        row.packaging = crate::domain::PackagingKind::Exe;
+        upsert_summary(&pool, &row, 300).await.unwrap();
+        let got = get_summary(&pool, SourceKind::WingetCommunity, "A.B")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(got.name, "Renamed");
+        assert_eq!(got.packaging, crate::domain::PackagingKind::Exe);
     }
 
     #[tokio::test]
