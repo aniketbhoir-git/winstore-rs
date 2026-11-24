@@ -240,6 +240,41 @@ async fn update_all_continues_when_the_ledger_refuses_one_package() {
     assert_eq!(b.installed_version.as_deref(), Some("2.0.0"));
 }
 
+// The ledger refuses `begin` after the executor already started the update (here the id has
+// no known source, so no row can be created). The started process is cancelled and drained,
+// the finish event carries the refusal, and the ledger is untouched.
+#[tokio::test]
+async fn update_all_cancels_and_abandons_when_begin_is_refused() {
+    let bogus: PackageId = serde_json::from_str("\"nosuchsource/A.A\"").unwrap();
+    let mut exec = FakeExec::holding();
+    exec.updates = vec![UpdateAvailable {
+        package_id: bogus.clone(),
+        installed_version: "1.0.0".into(),
+        latest_version: "2.0.0".into(),
+        source: KIND,
+        is_auto: false,
+    }];
+    let exec = Arc::new(exec);
+    let (state, pool) = state_with(false, false, shared_exec_factory(exec.clone())).await;
+    let sink = Arc::new(RecordingSink::default());
+    let summary = run_update_all(&state, sink.clone()).await.unwrap();
+    assert_eq!(
+        (summary.total, summary.succeeded, summary.failed),
+        (1, 0, 1)
+    );
+    // The started operation was cancelled and nothing is left running.
+    assert_eq!(exec.cancelled.lock().unwrap().as_slice(), ["op-1"]);
+    assert!(exec.held.lock().unwrap().is_empty());
+    // The finish event carries the refusal; the ledger has no row.
+    let fin = sink.named(EVENT_OPERATION_FINISHED);
+    assert_eq!(fin.len(), 1);
+    assert_eq!(fin[0]["ok"], false);
+    assert_eq!(fin[0]["error"]["code"], "invalid_config");
+    assert!(installs::get(&pool, &bogus).await.unwrap().is_none());
+    let core = state.core().await.unwrap();
+    assert!(core.active.get(&bogus).is_none());
+}
+
 #[tokio::test]
 async fn cancelled_reinstall_keeps_the_installed_version() {
     let exec = FakeExec::scripted(vec![(

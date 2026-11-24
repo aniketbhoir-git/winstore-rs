@@ -6,7 +6,7 @@ use std::time::Duration;
 use super::*;
 use crate::db::repo::{installs, operation_log};
 use crate::domain::{InstallRecord, InstallState, OperationStage, SourceKind};
-use crate::executor::{InstallRequest, PackageExecutor};
+use crate::executor::InstallRequest;
 use crate::ipc::events::testing::RecordingSink;
 use crate::ipc::events::EVENT_OPERATION_FINISHED;
 use crate::ipc::state::AppState;
