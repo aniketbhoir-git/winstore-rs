@@ -1,0 +1,12 @@
+{
+  "agreement_text": null,
+  "agreement_url": "https://example.org/terms",
+  "code": "agreements_required",
+  "detail": null,
+  "message": "agreements must be accepted (source: false, package: true)",
+  "package_agreements": true,
+  "retryable": false,
+  "source_agreements": false,
+  "version": "1.2.3",
+  "winget_source": "winget"
+}

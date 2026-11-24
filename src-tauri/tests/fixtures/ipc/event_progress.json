@@ -1,0 +1,10 @@
+{
+  "cancel_failed": false,
+  "fraction": 0.5,
+  "message": "Downloading",
+  "operation": "install",
+  "operation_id": "op-1",
+  "package_id": "winget_community/Foo.Bar",
+  "stage": "downloading",
+  "timestamp": 1700000000
+}

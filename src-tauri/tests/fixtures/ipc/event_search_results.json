@@ -1,0 +1,18 @@
+{
+  "results": [
+    {
+      "description": "A package",
+      "icon_url": "https://example.org/i.png",
+      "id": "winget_community/Foo.Bar",
+      "is_paid": false,
+      "latest_version": "1.2.3",
+      "name": "Foo Bar",
+      "packaging": "msi",
+      "publisher": "Example Publisher",
+      "rating": 4.5,
+      "rating_count": 120,
+      "source": "winget_community"
+    }
+  ],
+  "search_id": "s1"
+}

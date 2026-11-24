@@ -52,7 +52,11 @@ elevation). `tier:any` issues are reserved for community contributors on cheaper
   (A5 to A25) are in `docs/reviews/2026-11-11-spec-review.md`.
 - Known bug: search returns unrelated results (the winget.run service does). See F1 in
   `docs/ISSUE-BACKLOG.md`; it raises #16 to an MVP blocker.
-- Requirement: all testing must run unattended, for contributors also. See F2.
+- Requirement: all testing must run unattended, for contributors also. See F2. Run
+  `powershell -File scripts/test.ps1` (L1 Rust + L2 UI; report in `src-tauri/target/test-report.md`).
+  The real-winget test refuses to run off a GitHub-hosted runner; no other test may call
+  `WingetCli::connect`. Design: `docs/designs/unattended-testing.md`. F2 steps 1 to 4 and 6 are
+  built; steps 5 (fork approval setting) and 7 (follow-up issues) are open.
 - Next: the "Review follow-ups" section of `docs/ISSUE-BACKLOG.md`, in the order the review
   file suggests.
 
