@@ -28,8 +28,9 @@ Contract: SPEC §5.2, §6.2, §6.3, §8.
 |---|---|
 | Discovery order | 1) `STORE_WINGET_PATH` env var (tests/override), 2) `winget.exe` on PATH, 3) `%LOCALAPPDATA%\Microsoft\WindowsApps\winget.exe`, 4) `Get-AppxPackage Microsoft.DesktopAppInstaller` then `InstallLocation\winget.exe`. None found -> `AppError::WingetNotFound`. |
 | Version probe | `winget --version` prints `v1.29.380` (strip `v`). `winget --info` adds directories and admin settings. |
-| Minimum version | Require >= 1.6.0 (project choice, not from docs: all flags below exist well before it). Lower -> `AppError::Unsupported("winget >= 1.6 required")`. Raise only on evidence. |
+| Minimum version | Require >= 1.29.0 (SPEC §2; winget 1.29 prints full columns to a pipe). Lower -> `AppError::Unsupported("winget 1.29 or newer is necessary")`. Raise only on evidence. |
 | Sources here | `msstore` (storeedgefd.dsx.mp.microsoft.com/v9.0), `winget` (cdn.winget.microsoft.com/cache), `winget-font` (explicit). Always pass `--source` explicitly. |
+| Read-only catalog calls | `WingetCli::search_catalog` (`search --query T --source winget --count N --disable-interactivity`, 15 s) and `show_package` (`show --id I --exact --source winget --disable-interactivity`, 60 s). No agreement flag; exit 0x8A150046/0x8A150041 -> `agreements_required` with `winget_source` = `winget`. Parsers: `parse_columns`, `parse_show`. |
 | `--disable-interactivity` | Always pass. A prompt that would appear becomes an error exit instead of blocking on stdin; reduces spinner redraws. |
 | `--accept-source-agreements` | Accepts source terms. Valid on install, upgrade, uninstall, list, show, export. Store passes it in no command. |
 | `--accept-package-agreements` | Accepts package license text. Valid on install and upgrade only; uninstall exits 0x8A150002 (spike: uninstall takes only the source flag). Store passes it in no command. |

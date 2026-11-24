@@ -9,10 +9,10 @@ use std::fmt;
 use crate::domain::OperationStage;
 use crate::error::AppError;
 
-/// Oldest winget this project supports (project choice; see the skill).
+/// Oldest winget this project supports (SPEC 2; 1.29 prints full columns to a pipe).
 pub const MIN_VERSION: WingetVersion = WingetVersion {
     major: 1,
-    minor: 6,
+    minor: 29,
     patch: 0,
 };
 
@@ -747,13 +747,15 @@ mod tests {
         let v = WingetVersion::parse("v1.29.380").unwrap();
         assert_eq!((v.major, v.minor, v.patch), (1, 29, 380));
         assert_eq!(WingetVersion::parse("1.6\r\n").unwrap().patch, 0);
+        assert!(WingetVersion::parse("v1.28.240").unwrap() < MIN_VERSION);
+        assert!(WingetVersion::parse("v1.29.0").unwrap() >= MIN_VERSION);
         assert_eq!(
             WingetVersion::parse("v1.7.10861-preview").unwrap().patch,
             10861
         );
         assert!(WingetVersion::parse("garbage").is_none());
         assert!(WingetVersion::parse("v1.5.9999").unwrap() < MIN_VERSION);
-        assert!(WingetVersion::parse("v1.6.0").unwrap() >= MIN_VERSION);
+        assert!(WingetVersion::parse("v1.6.0").unwrap() < MIN_VERSION);
         assert!(WingetVersion::parse("v2.0.0").unwrap() >= MIN_VERSION);
     }
 

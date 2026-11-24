@@ -16,8 +16,9 @@ use tokio::process::{Child, Command};
 use tokio::sync::{mpsc, oneshot, Notify};
 
 use super::winget_parse::{
-    map_exit, parse_table, ExitOutcome, LineSplitter, ProgressParser, WingetVersion,
-    EXIT_NO_APPLICATIONS_FOUND, EXIT_UPDATE_NOT_APPLICABLE, MIN_VERSION,
+    map_exit, parse_columns, parse_show, parse_table, ExitOutcome, LineSplitter, ProgressParser,
+    SearchRow, ShowBlock, WingetVersion, EXIT_NO_APPLICATIONS_FOUND, EXIT_UPDATE_NOT_APPLICABLE,
+    MIN_VERSION,
 };
 use super::{
     ExecFuture, InstallRequest, InstalledPackage, OpGuard, OpPermit, OperationHandle,
@@ -36,6 +37,10 @@ pub const PATH_OVERRIDE_ENV: &str = "STORE_WINGET_PATH";
 
 const CAPTURE_TIMEOUT: Duration = Duration::from_secs(120);
 const PROBE_TIMEOUT: Duration = Duration::from_secs(15);
+/// Time limit of one `winget search` call (design catalog-winget-cli, section 2).
+pub const SEARCH_TIMEOUT: Duration = Duration::from_secs(15);
+/// Time limit of one `winget show` call; the first `show` of a package can take 20 s or more.
+pub const SHOW_TIMEOUT: Duration = Duration::from_secs(60);
 const DRAIN_TIMEOUT: Duration = Duration::from_secs(2);
 const STDERR_CAP: usize = 16 * 1024;
 const EVENT_CHANNEL: usize = 256;
@@ -196,6 +201,35 @@ pub fn list_installed_args() -> Vec<String> {
 
 pub fn list_updates_args() -> Vec<String> {
     s(&["upgrade", "--include-unknown", "--disable-interactivity"])
+}
+
+/// `winget search` for the community source. The text is one argument after `--query`, so a
+/// text that starts with `-` is never read as a flag. No agreement flag, ever.
+pub fn search_args(text: &str, count: u32) -> Vec<String> {
+    let count = count.to_string();
+    s(&[
+        "search",
+        "--query",
+        text,
+        "--source",
+        "winget",
+        "--count",
+        &count,
+        "--disable-interactivity",
+    ])
+}
+
+/// `winget show` for one community package id.
+pub fn show_args(id: &str) -> Vec<String> {
+    s(&[
+        "show",
+        "--id",
+        id,
+        "--exact",
+        "--source",
+        "winget",
+        "--disable-interactivity",
+    ])
 }
 
 pub fn pin_args(id: &str, add: bool) -> Vec<String> {
@@ -394,6 +428,8 @@ struct Inner {
     cancels: Mutex<HashMap<String, Arc<Notify>>>,
     next_op: AtomicU64,
     stop: StopFn,
+    search_limit: Duration,
+    show_limit: Duration,
 }
 
 #[derive(Clone)]
@@ -512,6 +548,8 @@ impl WingetCli {
                 cancels: Mutex::new(HashMap::new()),
                 next_op: AtomicU64::new(1),
                 stop: default_stop,
+                search_limit: SEARCH_TIMEOUT,
+                show_limit: SHOW_TIMEOUT,
             }),
         }
     }
@@ -522,6 +560,16 @@ impl WingetCli {
         Arc::get_mut(&mut self.inner)
             .expect("with_stop_fn must run before the executor is shared")
             .stop = stop;
+        self
+    }
+
+    /// Replaces the time limits of `search_catalog` and `show_package` (test seam). Call it
+    /// right after construction, before the executor is cloned.
+    pub fn with_read_limits(mut self, search: Duration, show: Duration) -> Self {
+        let inner = Arc::get_mut(&mut self.inner)
+            .expect("with_read_limits must run before the executor is shared");
+        inner.search_limit = search;
+        inner.show_limit = show;
         self
     }
 
@@ -557,7 +605,9 @@ impl WingetCli {
             ))
         })?;
         if version < MIN_VERSION {
-            return Err(AppError::Unsupported("winget >= 1.6 required".into()));
+            return Err(AppError::Unsupported(
+                "winget 1.29 or newer is necessary".into(),
+            ));
         }
         Ok(version)
     }
@@ -583,7 +633,12 @@ impl WingetCli {
         let child = self.spawn(args)?;
         let out = tokio::time::timeout(limit, child.wait_with_output())
             .await
-            .map_err(|_| AppError::SourceUnavailable("winget did not answer in time".into()))??;
+            .map_err(|_| {
+                AppError::SourceUnavailable(format!(
+                    "winget did not answer in {}",
+                    describe_limit(limit)
+                ))
+            })??;
         Ok(Captured {
             code: out.status.code().unwrap_or(-1),
             stdout: String::from_utf8_lossy(&out.stdout).into_owned(),
@@ -705,6 +760,36 @@ impl WingetCli {
         }
     }
 
+    /// Read-only `winget search` of the community source. An empty text starts no process; the
+    /// "no package found" exit gives an empty list. Takes no `OpGuard`: it changes nothing.
+    pub async fn search_catalog(&self, text: &str, count: u32) -> AppResult<Vec<SearchRow>> {
+        let text = text.trim();
+        if text.is_empty() {
+            return Ok(Vec::new());
+        }
+        let out = self
+            .run_capture_timeout(&search_args(text, count), self.inner.search_limit)
+            .await?;
+        if out.code as u32 == EXIT_NO_APPLICATIONS_FOUND {
+            return Ok(Vec::new());
+        }
+        out.require_catalog_ok(text)?;
+        let cols = parse_columns(&out.stdout).ok_or_else(unrecognized_output)?;
+        for w in &cols.warnings {
+            tracing::warn!("winget search: {w}");
+        }
+        Ok(cols.rows)
+    }
+
+    /// Read-only `winget show` of one community package id.
+    pub async fn show_package(&self, id: &str) -> AppResult<ShowBlock> {
+        let out = self
+            .run_capture_timeout(&show_args(id), self.inner.show_limit)
+            .await?;
+        out.require_catalog_ok(id)?;
+        parse_show(&out.stdout, id).ok_or_else(unrecognized_output)
+    }
+
     pub async fn query_installed(&self) -> AppResult<Vec<InstalledPackage>> {
         let args = list_installed_args();
         let out = self.run_capture(&args).await?;
@@ -774,6 +859,18 @@ fn source_kind(name: &str) -> Option<SourceKind> {
     }
 }
 
+fn unrecognized_output() -> AppError {
+    AppError::SourceUnavailable("winget output not recognized".into())
+}
+
+fn describe_limit(limit: Duration) -> String {
+    if limit.as_millis() % 1000 == 0 {
+        format!("{} s", limit.as_secs())
+    } else {
+        format!("{} ms", limit.as_millis())
+    }
+}
+
 fn map_spawn_err(e: std::io::Error) -> AppError {
     if e.kind() == std::io::ErrorKind::NotFound {
         AppError::WingetNotFound
@@ -789,6 +886,29 @@ struct Captured {
 }
 
 impl Captured {
+    /// Like `require_ok` for the read-only catalog calls: an agreement exit also names the
+    /// source (`winget`), as the install path does.
+    fn require_catalog_ok(&self, what: &str) -> AppResult<()> {
+        match self.require_ok(what) {
+            Err(AppError::AgreementsRequired {
+                source_agreements,
+                package_agreements,
+                version,
+                agreement_text,
+                agreement_url,
+                ..
+            }) => Err(AppError::AgreementsRequired {
+                source_agreements,
+                package_agreements,
+                winget_source: Some("winget".to_string()),
+                version,
+                agreement_text,
+                agreement_url,
+            }),
+            other => other,
+        }
+    }
+
     fn require_ok(&self, what: &str) -> AppResult<()> {
         let detail = if self.stderr.trim().is_empty() {
             self.stdout.trim()
@@ -1176,6 +1296,48 @@ mod tests {
         assert!(has(&all[3], "--disable-interactivity") && has(&all[4], "--include-unknown"));
         assert_eq!(all[5][..3], ["pin", "add", "--id"]);
         assert_eq!(all[6][1], "remove");
+    }
+
+    #[test]
+    fn catalog_args_are_read_only_and_clean() {
+        let search = search_args("-x", 30);
+        assert_eq!(
+            search,
+            s(&[
+                "search",
+                "--query",
+                "-x",
+                "--source",
+                "winget",
+                "--count",
+                "30",
+                "--disable-interactivity"
+            ])
+        );
+        let show = show_args("VideoLAN.VLC");
+        assert_eq!(
+            show,
+            s(&[
+                "show",
+                "--id",
+                "VideoLAN.VLC",
+                "--exact",
+                "--source",
+                "winget",
+                "--disable-interactivity"
+            ])
+        );
+        for a in [&search, &show] {
+            guard_args(a).unwrap();
+            never_forbidden(a);
+            assert!(has(a, "--source") && has(a, "--disable-interactivity"));
+        }
+    }
+
+    #[test]
+    fn limit_text_names_the_number() {
+        assert_eq!(describe_limit(Duration::from_secs(15)), "15 s");
+        assert_eq!(describe_limit(Duration::from_millis(250)), "250 ms");
     }
 
     #[test]

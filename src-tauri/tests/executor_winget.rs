@@ -54,6 +54,14 @@ impl Fx {
         Fx { dir, cli }
     }
 
+    /// Replaces the catalog time limits; the executor must not be shared yet.
+    fn with_limits(self, search: Duration, show: Duration) -> Fx {
+        Fx {
+            dir: self.dir,
+            cli: self.cli.with_read_limits(search, show),
+        }
+    }
+
     fn invocations(&self) -> Vec<Vec<String>> {
         let text = std::fs::read_to_string(self.dir.path().join("argv.txt")).unwrap_or_default();
         text.lines()
@@ -529,10 +537,10 @@ async fn version_probe_enforces_floor() {
     assert_eq!((v.major, v.minor), (1, 29));
     assert!(ok.cli.is_available().await);
 
-    let old = Fx::build("", &env("v1.5.1881"), None);
+    let old = Fx::build("", &env("v1.28.240"), None);
     let err = old.cli.probe().await.unwrap_err();
     assert_eq!(err.code(), "unsupported");
-    assert!(err.to_string().contains("1.6"));
+    assert!(err.to_string().contains("1.29"));
     assert!(!old.cli.is_available().await);
 
     let junk = Fx::build("", &env("hello"), None);
@@ -980,4 +988,106 @@ async fn log_rows_follow_the_outcome_for_success_and_cancel() {
             "{word}: {rows:#?}"
         );
     }
+}
+
+// ---- read-only catalog calls (design catalog-winget-cli, step 2) ----------------------------
+
+fn fixture(name: &str) -> String {
+    format!(
+        "{}/tests/fixtures/winget/1.29/{name}",
+        env!("CARGO_MANIFEST_DIR")
+    )
+}
+
+#[tokio::test]
+async fn search_catalog_parses_fixture_and_passes_the_documented_argv() {
+    let fx = Fx::new(&format!("file {}\n", fixture("search-vlc.txt")));
+    let rows = fx.cli.search_catalog("  vlc ", 30).await.unwrap();
+    assert_eq!(rows[0].id, "VideoLAN.VLC");
+    assert_eq!(rows.len(), 4);
+    assert_eq!(
+        fx.last_argv().join(" "),
+        "search --query vlc --source winget --count 30 --disable-interactivity"
+    );
+}
+
+#[tokio::test]
+async fn search_catalog_empty_text_starts_no_process() {
+    let fx = Fx::new("");
+    assert!(fx.cli.search_catalog("   ", 30).await.unwrap().is_empty());
+    assert!(fx.invocations().is_empty());
+}
+
+#[tokio::test]
+async fn search_catalog_no_match_is_an_empty_list() {
+    let fx = Fx::new(&format!(
+        "file {}\nexit 0x8A150014\n",
+        fixture("search-none.txt")
+    ));
+    assert!(fx.cli.search_catalog("zzzz", 30).await.unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn search_catalog_unrecognized_output_is_source_unavailable() {
+    let fx = Fx::new("out something nobody expected\n");
+    let err = fx.cli.search_catalog("vlc", 30).await.unwrap_err();
+    assert_eq!(err.code(), "source_unavailable");
+    assert!(err.to_string().contains("not recognized"));
+}
+
+#[tokio::test]
+async fn catalog_calls_map_agreement_exits_and_pass_no_agreement_flag() {
+    for code in ["0x8A150046", "0x8A150041"] {
+        let fx = Fx::new(&format!("out terms\nexit {code}\n"));
+        for err in [
+            fx.cli.search_catalog("vlc", 30).await.unwrap_err(),
+            fx.cli.show_package("VideoLAN.VLC").await.unwrap_err(),
+        ] {
+            match err {
+                AppError::AgreementsRequired {
+                    source_agreements,
+                    package_agreements,
+                    winget_source,
+                    ..
+                } => {
+                    assert_eq!(source_agreements, code == "0x8A150046");
+                    assert_eq!(package_agreements, code == "0x8A150041");
+                    assert_eq!(winget_source.as_deref(), Some("winget"));
+                }
+                other => panic!("{other:?}"),
+            }
+        }
+        for argv in fx.invocations() {
+            assert!(argv.iter().all(|a| !a.starts_with("--accept-")), "{argv:?}");
+        }
+    }
+}
+
+#[tokio::test]
+async fn show_package_parses_fixture_and_maps_not_found() {
+    let fx = Fx::new(&format!("file {}\n", fixture("show-vlc.txt")));
+    let block = fx.cli.show_package("VideoLAN.VLC").await.unwrap();
+    assert_eq!(block.publisher.as_deref(), Some("VideoLAN"));
+    assert_eq!(
+        fx.last_argv().join(" "),
+        "show --id VideoLAN.VLC --exact --source winget --disable-interactivity"
+    );
+
+    let none = Fx::new("out No package found matching input criteria.\nexit 0x8A150014\n");
+    let err = none.cli.show_package("Nope.Nope").await.unwrap_err();
+    assert_eq!(err.code(), "package_not_found");
+}
+
+#[tokio::test]
+async fn catalog_time_limit_names_the_limit() {
+    let fx = Fx::new(
+        "sleep 3000
+",
+    )
+    .with_limits(Duration::from_millis(200), Duration::from_millis(300));
+    let err = fx.cli.search_catalog("vlc", 30).await.unwrap_err();
+    assert_eq!(err.code(), "source_unavailable");
+    assert!(err.to_string().contains("200 ms"), "{err}");
+    let err = fx.cli.show_package("A.B").await.unwrap_err();
+    assert!(err.to_string().contains("300 ms"), "{err}");
 }
