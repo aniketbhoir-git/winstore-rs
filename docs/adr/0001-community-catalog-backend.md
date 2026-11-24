@@ -1,7 +1,9 @@
 # ADR 0001 — Community catalog backend
 
-- **Status:** proposed. The maintainer has not picked an option.
-- **Date:** 2026-11-11
+- **Status:** accepted 2026-11-25 — option A, chosen by the orchestrator in GTAVI mode (owner
+  away); the owner may reverse it.
+- **Date:** 2026-11-11 (proposed); 2026-11-25 (accepted)
+- **Design:** `docs/designs/catalog-winget-cli.md`
 - **Closes when accepted:** F1 (GitHub #20), follow-up #16, review action A14.
 - **Measured on:** Windows 11 build 22631, winget 1.29.380, one machine, English locale.
 
@@ -81,6 +83,20 @@ release notes) for one package at a time.
   alive. That is the same weakness that stopped `winget.run`.
 - Not measured. No size or build time is known.
 
+### Note on option B (research of 2026-11-25)
+
+New research corrects one fact above. The per-package files are not an unknown binary format.
+`versionData.mszyml` is a Windows Compression API container around MSZIP data. The decoded
+data is plain YAML: a version list with the path and the SHA-256 of each manifest. The
+manifest itself is plain YAML at `https://cdn.winget.microsoft.com/cache/<path>`. One chain
+(index, hash, version file, manifest) thus gives search and detail, and a hash checks each
+step.
+
+The decision does not change. The CDN layout, the index schema and the container are still
+not a published interface. Nobody promises that they stay stable. The schema already moved
+from 1.x to 2.x, and a delta index is in development. Option B still fails the rule "public,
+documented interfaces only". Source: `research-drafts/catalog-sources.md` (2026-11-25).
+
 ## Comparison
 
 | | A CLI | B index | C mirrors | D COM | E own catalog |
@@ -92,6 +108,13 @@ release notes) for one package at a time.
 | Icons, screenshots, ratings | No | No | Icons only | No | Icons only |
 | New code | About 300 lines | 1500 or more | n/a | 800 or more, plus bindings | Not measured |
 | Risk that stays | Text format, locale | Format change | n/a | Access not verified | We run a service |
+
+## Decision (2026-11-25)
+
+Option A is accepted with the three conditions below. The orchestrator chose it in GTAVI
+mode while the owner was away. The owner may reverse it. The implementation design is
+`docs/designs/catalog-winget-cli.md`. Condition 1 is already met: SPEC §2 sets the minimum
+winget version to 1.29 (maintainer decision of 2026-11-12).
 
 ## Recommendation
 
