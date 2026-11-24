@@ -114,6 +114,7 @@ There are two kinds, and they use two flags.
   Prove in a small test that an unpackaged Tauri process can activate the winget COM server and receive `InstallProgress` events. If it works, use it for install and upgrade; keep the CLI as a fallback. The CLI gives no progress when piped on winget 1.29.160 and later.
 - **Agreement screen before install.**
   Read package and source agreements (COM `Agreements`, or `winget show`), show label, text and link, and ask once. Then pass `--accept-package-agreements`. This is better than UniGetUI's silent accept.
+  This matches only the planned F4 case (b). The current SPEC §6.6 case (c) passes no agreement flag.
 - **Source terms for the Store source.**
   If `msstore` is added, show its "Terms of Transaction" link and the note that the market (country) is sent. Save the acceptance with the agreement identifier.
 - **Clear errors for agreement exit codes.**

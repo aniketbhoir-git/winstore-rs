@@ -91,6 +91,7 @@ Lesson: UniGetUI trusts winget's own matching and adds a client-side name/id fil
 - Live check on 2026-11-25. `GET https://storeedgefd.dsx.mp.microsoft.com/v9.0/information` returned 200. It lists server versions 1.0.0, 1.1.0, 1.6.0 and says `RequiredQueryParameters: ["market"]`. It also lists one source agreement: "Terms of Transaction" (https://aka.ms/microsoft-store-terms-of-transaction).
 - Live check. `POST .../v9.0/manifestSearch` with `{"Query":{"KeyWord":"vlc","MatchType":"Substring"},"MaximumResults":5}` returned `XPDM1ZW6815MQM` "VLC" (VideoLAN) and `9NBLGGH4VVNH` "VLC UWP". Both are correct. The version is "Unknown" in the search row.
 - The Store source asks the user to accept terms, and it declares a market field. Treat it as a second, optional source. Do not mix it into the community list without a source label.
+Not adopted: ADR 0001 rejects this, because the interface is not published (repo rule: public, documented interfaces only).
 
 ## 4. winget.run: what it was and its state
 
@@ -105,6 +106,7 @@ Lesson: UniGetUI trusts winget's own matching and adds a client-side name/id fil
 - **Local ranked search over the official winget index.**
   Download `source2.msix`, read `index.db`, and rank with winget's own ladder (equal before substring; Id, Name, Moniker, Command, Tag).
   This fixes #20 with no live service, and tests can use a small fixture index.
+  Not adopted: ADR 0001 rejects this, because the interface is not published (repo rule: public, documented interfaces only).
 - **Show why a result matched.**
   Show a small badge: "ID match", "Name", "Tag", "Command". Users see why an app is in the list and trust the order.
 - **Search modes: Name, Id, Exact.**

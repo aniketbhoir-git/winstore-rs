@@ -96,6 +96,7 @@ So one public chain gives search, details, the version list, the installer URL a
 
 Use option B: read the official `source2.msix` index locally for search, and read the hash-verified `versionData.mszyml` and manifest YAML for details.
 It is fresh to the hour, works offline, needs no winget on the machine and no live third-party service, and it fixes #20 with a ranking ladder that copies winget; keep option A (winget CLI) as the fallback when the index major version is not 2, and amend ADR 0001 because its claim that per-package files are an unspecified binary format is wrong.
+Not adopted: ADR 0001 rejects this, because the interface is not published (repo rule: public, documented interfaces only).
 
 ## Features worth building
 
