@@ -864,7 +864,7 @@ fn unrecognized_output() -> AppError {
 }
 
 fn describe_limit(limit: Duration) -> String {
-    if limit.as_millis() % 1000 == 0 {
+    if limit.as_millis().is_multiple_of(1000) {
         format!("{} s", limit.as_secs())
     } else {
         format!("{} ms", limit.as_millis())
