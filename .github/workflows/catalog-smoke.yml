@@ -1,0 +1,66 @@
+name: Catalog smoke (real winget, manual)
+
+# Manual start only. Not part of the required `windows` check. Read-only: it searches and
+# shows packages, installs nothing, and passes no agreement flag.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  catalog-smoke:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    env:
+      STORE_CATALOG_ARTIFACTS: ${{ github.workspace }}\catalog-smoke-artifacts
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Make sure winget is present (runner only)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Continue'
+          if (-not (Get-Command winget -ErrorAction SilentlyContinue)) {
+            # The hosted image may lack winget. Official, free path from Microsoft:
+            # the Microsoft.WinGet.Client module and Repair-WinGetPackageManager, which
+            # installs App Installer (winget). This changes the runner only.
+            Write-Host 'winget not on PATH; bootstrapping with Microsoft.WinGet.Client'
+            Install-PackageProvider -Name NuGet -Force | Out-Null
+            Install-Module -Name Microsoft.WinGet.Client -Force -Repository PSGallery
+            Repair-WinGetPackageManager -AllUsers -Latest
+            $env:Path += ";$env:LOCALAPPDATA\Microsoft\WindowsApps"
+            "$env:LOCALAPPDATA\Microsoft\WindowsApps" | Out-File -Append -Encoding utf8 $env:GITHUB_PATH
+          }
+          winget --version
+          if ($LASTEXITCODE -ne 0) { Write-Error 'winget absent'; exit 1 }
+
+      - name: Record raw winget output
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force $env:STORE_CATALOG_ARTIFACTS | Out-Null
+          $dir = $env:STORE_CATALOG_ARTIFACTS
+          winget --version | Out-File "$dir\winget-version-step.txt"
+          $c = '--source','winget','--disable-interactivity'
+          # Piped to Out-File: stdout is a pipe. Shows whether columns are cut.
+          winget search --query vlc @c | Out-File -Encoding utf8 "$dir\step-search-vlc.pipe.txt"
+          winget search --query zzzqqqxxnotapackage @c | Out-File -Encoding utf8 "$dir\step-search-nonsense.pipe.txt"
+          winget show --id VideoLAN.VLC --exact @c | Out-File -Encoding utf8 "$dir\step-show-vlc.pipe.txt"
+        continue-on-error: true
+
+      - name: Real-winget catalog smoke
+        shell: pwsh
+        working-directory: src-tauri
+        run: cargo test --test winget_catalog_smoke -- --ignored --nocapture
+
+      - name: Upload raw output
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: catalog-smoke-raw
+          path: ${{ env.STORE_CATALOG_ARTIFACTS }}
+          if-no-files-found: warn

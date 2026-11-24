@@ -30,7 +30,11 @@ fn only_winget_smoke_calls_real_winget_connect() {
     }));
     let offenders: Vec<_> = files
         .iter()
-        .filter(|p| !p.ends_with("winget_smoke.rs") && !p.ends_with("no_real_winget.rs"))
+        .filter(|p| {
+            !p.ends_with("winget_smoke.rs")
+                && !p.ends_with("winget_catalog_smoke.rs")
+                && !p.ends_with("no_real_winget.rs")
+        })
         .filter(|p| std::fs::read_to_string(p).unwrap().contains(&needle))
         .collect();
     assert!(
