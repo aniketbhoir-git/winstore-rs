@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { agreementUrl, errorText } from '../lib/errors'
   import { operations } from '../lib/operations.svelte'
   import type { PackageSummary } from '../lib/types'
   import BuyInStoreButton from './BuyInStoreButton.svelte'
@@ -17,14 +18,21 @@
 {:else if running && op}
   <div class="progress">
     <ProgressBar fraction={op.fraction} label={`${op.stage}${op.message ? ': ' + op.message : ''}`} />
-    <button class="secondary" onclick={() => operations.cancel(pkg.id)}>Cancel</button>
+    <button
+      class="secondary"
+      disabled={op.cancelFailed}
+      title={op.cancelFailed ? 'Cancel did not stop the installer' : undefined}
+      onclick={() => operations.cancel(pkg.id)}>Cancel</button>
   </div>
 {:else}
   <button disabled={installed} onclick={() => operations.install(pkg.id)}>
     {installed ? 'Installed' : op?.error && op.operation !== 'remove' ? 'Retry' : 'Install'}
   </button>
   {#if op?.error}
-    <p class="error" role="alert">{op.error.message}</p>
+    <p class="error" role="alert">
+      {errorText(op.error)}
+      {#if agreementUrl(op.error)}<span class="url">{agreementUrl(op.error)}</span>{/if}
+    </p>
   {:else if op?.stage === 'cancelled'}
     <p class="note">Cancelled</p>
   {/if}
@@ -66,6 +74,10 @@
     margin: 0.3rem 0 0;
     font-size: 0.75rem;
     color: var(--danger);
+  }
+  .url {
+    display: block;
+    overflow-wrap: anywhere;
   }
   .note {
     margin: 0.3rem 0 0;

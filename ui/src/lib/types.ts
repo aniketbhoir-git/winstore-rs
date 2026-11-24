@@ -77,6 +77,13 @@ export interface AppError {
   message: string
   detail: string | null
   retryable: boolean
+  /** `agreements_required` only (SPEC §1.3); catalog-derived, show as text. */
+  agreement_text?: string | null
+  agreement_url?: string | null
+  source_agreements?: boolean
+  package_agreements?: boolean
+  version?: string | null
+  winget_source?: string | null
 }
 
 export interface ProgressEvent {
@@ -87,6 +94,8 @@ export interface ProgressEvent {
   fraction: number
   message: string
   timestamp: number
+  /** True when a cancel could not stop the installer tree (SPEC §6.7 gap table). */
+  cancel_failed?: boolean
 }
 
 export interface SearchResultsEvent {

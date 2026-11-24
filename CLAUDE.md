@@ -44,7 +44,7 @@ elevation). `tier:any` issues are reserved for community contributors on cheaper
   builds case (c) (no consent option, never an agreement flag); case (b) is later work, F4 in
   `docs/ISSUE-BACKLOG.md`. WP5 step 2, the core work, is done on the branch (2026-11-13). Next
   for PR #19: the maintainer's push and merge decision. Then step 3 (a second pull request)
-  and F4.
+  and F4. Step 3 is built on `impl/6--ui-step3` (2026-11-25): no-text message, disabled Cancel, version filter, UI tests.
 - `docs/SPEC.md` was repaired and reviewed with EGM on 2026-11-11 and 2026-11-12. The reports
   are in `docs/reviews/2026-11-11-spec-review-2/`. A section marked *built* or *built on
   branch* follows the code; a *planned* section overrides it. Where a built section and the
