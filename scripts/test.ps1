@@ -48,13 +48,15 @@ if (-not (Test-Tool 'npm')) {
 # --- L2 UI ---
 if ($uiOk) {
     $r = Invoke-Step $ui 'npm' @('test')
+    # Vitest prints ANSI colour codes on Windows; strip them before matching.
+    $out = [regex]::Replace([string]$r.Output, "\x1b\[[0-9;]*m", '')
     if ($r.Code -eq 0) {
-        $m = [regex]::Match($r.Output, '(?m)^\s*Tests\s+(\d+) passed')
+        $m = [regex]::Match($out, '(?m)^\s*Tests\s+(\d+) passed')
         $n = if ($m.Success) { $m.Groups[1].Value } else { '?' }
         $lines.Add("L2 UI: pass ($n passed)")
     } else {
         $lines.Add('L2 UI: fail'); $failed = $true
-        $names = [regex]::Matches($r.Output, '(?m)^\s*FAIL\s+(.+)$') | ForEach-Object { $_.Groups[1].Value.Trim() } | Select-Object -Unique
+        $names = [regex]::Matches($out, '(?m)^\s*FAIL\s+(.+)$') | ForEach-Object { $_.Groups[1].Value.Trim() } | Select-Object -Unique
         foreach ($nm in $names) { $lines.Add("  - $nm") }
     }
 }
