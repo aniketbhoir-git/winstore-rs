@@ -78,6 +78,8 @@ pub(crate) struct FakeExec {
     pub hold: AtomicBool,
     pub held: Mutex<Vec<Held>>,
     pub next: AtomicU32,
+    /// When set, `cancel` fails and leaves the operation running.
+    pub cancel_fails: AtomicBool,
 }
 
 impl FakeExec {
@@ -146,6 +148,17 @@ impl FakeExec {
         }
     }
 
+    /// Ends a held operation with a real outcome (as if the process ended by itself).
+    pub fn finish_held(&self, op_id: &str, stage: OperationStage, result: AppResult<()>) {
+        let mut held = self.held.lock().unwrap();
+        if let Some(pos) = held.iter().position(|h| h.0 == op_id) {
+            let (op_id, id, op, tx, otx) = held.remove(pos);
+            let _ = tx.try_send(ProgressEvent::new(op_id, id, op, stage, 1.0, "end"));
+            drop(tx);
+            let _ = otx.send(result);
+        }
+    }
+
     /// Ends a held operation as cancelled.
     fn release(&self, op_id: &str) {
         let mut held = self.held.lock().unwrap();
@@ -175,6 +188,9 @@ impl PackageExecutor for FakeExec {
     }
     fn cancel<'a>(&'a self, op: &'a str) -> ExecFuture<'a, ()> {
         self.cancelled.lock().unwrap().push(op.to_string());
+        if self.cancel_fails.load(Ordering::SeqCst) {
+            return Box::pin(async { Err(AppError::DeploymentFailed("cancel refused".into())) });
+        }
         self.release(op);
         Box::pin(async { Ok(()) })
     }
