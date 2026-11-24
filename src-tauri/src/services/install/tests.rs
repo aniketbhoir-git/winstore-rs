@@ -6,7 +6,7 @@ use std::time::Duration;
 use super::*;
 use crate::db::repo::{installs, operation_log};
 use crate::domain::{InstallRecord, InstallState, OperationStage, SourceKind};
-use crate::executor::InstallRequest;
+use crate::executor::{InstallRequest, PackageExecutor};
 use crate::ipc::events::testing::RecordingSink;
 use crate::ipc::events::EVENT_OPERATION_FINISHED;
 use crate::ipc::state::AppState;
@@ -628,4 +628,67 @@ async fn failed_install_with_a_version_keeps_installed() {
     assert_eq!(rec.state, InstallState::Installed);
     assert_eq!(rec.installed_version.as_deref(), Some("1.0"));
     assert_eq!(rec.target_version, None);
+}
+
+#[tokio::test]
+async fn failed_cancel_then_the_real_outcome_settles_the_ledger() {
+    let exec = Arc::new(FakeExec::holding());
+    exec.cancel_fails
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+    let (core, pool, sink) = setup(exec.clone()).await;
+    let started = start_install(&core, sink_of(&sink), id(), InstallRequest::default())
+        .await
+        .unwrap();
+
+    // The cancel request fails: nothing ends, the operation is still busy.
+    assert!(cancel(&core, &started.operation_id).await.is_err());
+    assert_eq!(ledger(&pool).await.state, InstallState::Installing);
+    assert!(status(&core, &id()).await.unwrap().active.is_some());
+    assert!(sink.named(EVENT_OPERATION_FINISHED).is_empty());
+
+    // The process then finishes on its own; the ledger follows the real outcome.
+    exec.finish_held(&started.operation_id, OperationStage::Done, Ok(()));
+    let fin = finished(&sink, 1).await;
+    assert_eq!(fin["ok"], true);
+    let rec = ledger(&pool).await;
+    assert_eq!(rec.state, InstallState::Installed);
+    assert_eq!(rec.installed_version.as_deref(), Some("1.2.3"));
+    assert_eq!(rec.target_version, None);
+    assert!(status(&core, &id()).await.unwrap().active.is_none());
+}
+
+// Between the executor releasing its lock and the ledger update, `active` still blocks a
+// second operation: the package is only free once the ledger is settled.
+#[tokio::test]
+async fn package_is_free_only_after_the_ledger_is_settled() {
+    let exec = Arc::new(FakeExec::holding());
+    let (core, pool, sink) = setup(exec.clone()).await;
+    let started = start_install(&core, sink_of(&sink), id(), InstallRequest::default())
+        .await
+        .unwrap();
+    exec.finish_held(&started.operation_id, OperationStage::Done, Ok(()));
+    for _ in 0..500 {
+        match start_uninstall(&core, sink_of(&sink), id()).await {
+            // Refused while the first operation is still being settled.
+            Err(e) => {
+                assert_eq!(e.code(), "unsupported");
+                tokio::task::yield_now().await;
+            }
+            // Accepted: the install must already be recorded.
+            Ok(second) => {
+                assert_eq!(
+                    installs::get(&pool, &id())
+                        .await
+                        .unwrap()
+                        .unwrap()
+                        .installed_version
+                        .as_deref(),
+                    Some("1.2.3")
+                );
+                exec.cancel(&second.operation_id).await.unwrap();
+                return;
+            }
+        }
+    }
+    panic!("package never became free");
 }

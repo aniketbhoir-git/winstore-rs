@@ -28,7 +28,6 @@ export interface LiveLine {
   message: string
 }
 
-const TERMINAL: OperationStage[] = ['done', 'failed', 'cancelled']
 /** Live lines kept per package. */
 const LIVE_MAX = 200
 
@@ -51,7 +50,9 @@ class Operations {
           stage: e.stage,
           fraction: e.fraction,
           message: e.message,
-          finished: TERMINAL.includes(e.stage),
+          // Only `store:operation-finished` ends an operation: it comes after the ledger is
+          // settled, so a terminal progress event must not reveal stale buttons.
+          finished: false,
           error: prev && prev.operationId === e.operation_id ? prev.error : null,
         }
         this.addLine(e.package_id, {
