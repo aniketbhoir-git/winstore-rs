@@ -124,6 +124,8 @@ fn main() {
                 e.flush().unwrap();
             }
             "sleep" => std::thread::sleep(Duration::from_millis(rest.trim().parse().unwrap())),
+            // The grandchild is left running on purpose: the test checks it is stopped.
+            #[allow(clippy::zombie_processes)]
             "child" => {
                 let child = std::process::Command::new(std::env::current_exe().unwrap())
                     .args(["--sleep-only", rest.trim()])
