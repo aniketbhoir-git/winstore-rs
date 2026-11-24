@@ -457,6 +457,7 @@ fn fixture_event_progress() {
         message: "Downloading".into(),
         timestamp: 1_700_000_000,
         cancel_failed: false,
+        indeterminate: false,
     };
     check_fixture("event_progress.json", serde_json::to_value(&ev).unwrap());
 }

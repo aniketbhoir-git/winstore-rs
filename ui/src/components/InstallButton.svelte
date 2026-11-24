@@ -17,7 +17,7 @@
   <BuyInStoreButton id={pkg.id} />
 {:else if running && op}
   <div class="progress">
-    <ProgressBar fraction={op.fraction} label={`${op.stage}${op.message ? ': ' + op.message : ''}`} />
+    <ProgressBar fraction={op.fraction} indeterminate={op.indeterminate} label={`${op.stage}${op.message ? ': ' + op.message : ''}`} />
     <button
       class="secondary"
       disabled={op.cancelFailed}

@@ -14,6 +14,8 @@ export interface OpState {
   operation: OperationKind
   stage: OperationStage
   fraction: number
+  /** No download bar was seen: `fraction` is a stage estimate, not a measured value. */
+  indeterminate: boolean
   message: string
   /** Set once the operation ended. */
   finished: boolean
@@ -51,6 +53,7 @@ class Operations {
           operation: e.operation,
           stage: e.stage,
           fraction: e.fraction,
+          indeterminate: e.indeterminate === true,
           message: e.message,
           // Only `store:operation-finished` ends an operation: it comes after the ledger is
           // settled, so a terminal progress event must not reveal stale buttons.
@@ -80,6 +83,7 @@ class Operations {
           finished: true,
           stage: e.ok ? 'done' : e.error?.code === 'cancelled' ? 'cancelled' : 'failed',
           fraction: e.ok ? 1 : cur.fraction,
+          indeterminate: false,
           error: e.ok || e.error?.code === 'cancelled' ? null : e.error,
         }
       }),
@@ -113,6 +117,7 @@ class Operations {
       operation: active.operation,
       stage: 'queued',
       fraction: 0,
+      indeterminate: true,
       message: 'Running',
       finished: false,
       error: null,
@@ -139,6 +144,7 @@ class Operations {
       operation,
       stage: 'queued',
       fraction: 0,
+      indeterminate: true,
       message: 'Starting',
       finished: false,
       error: null,
