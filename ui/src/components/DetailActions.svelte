@@ -8,13 +8,21 @@
     pkg,
     versions,
     status,
-  }: { pkg: PackageSummary; versions: string[]; status: InstallStatus | null } = $props()
+    settling = false,
+  }: {
+    pkg: PackageSummary
+    versions: string[]
+    status: InstallStatus | null
+    settling?: boolean
+  } = $props()
 
   // '' = latest.
   let version = $state('')
 
   const op = $derived(operations.get(pkg.id))
   const running = $derived(!!op && !op.finished)
+  // Keep the busy look until the ledger was reloaded after the operation ended.
+  const busy = $derived(running || settling)
   const ledger = $derived(status?.state ?? 'not_installed')
   const present = $derived(
     ledger === 'installed' ||
@@ -32,7 +40,7 @@
 <div class="actions">
   {#if pkg.is_paid}
     <BuyInStoreButton id={pkg.id} />
-  {:else if running && op}
+  {:else if busy && op}
     <div class="progress">
       <ProgressBar
         fraction={op.fraction}

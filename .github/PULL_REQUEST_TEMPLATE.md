@@ -17,6 +17,7 @@ Closes: <!-- issue number -->
 - [ ] agreements surfaced, never silently pre-accepted
 - [ ] no Microsoft marks or assets bundled
 - [ ] no telemetry beyond the user-selected catalogs
+- [ ] no test calls the real winget (`WingetCli::connect`) outside `src-tauri/tests/winget_smoke.rs`
 
 ## Model / tokens (optional)
 <!-- model used + rough tokens, to help track community token spend -->

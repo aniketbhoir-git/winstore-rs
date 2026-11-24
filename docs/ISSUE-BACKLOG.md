@@ -210,7 +210,10 @@ Design work on them uses the Elephant-Goldfish Model; see `CLAUDE.md`, "Design w
   3. How do pull requests from forks run the end-to-end job without access to secrets?
   4. Which checks gate a merge, and which run on a schedule?
   5. What does the one command look like, and what report does it write?
-- **Next step:** a design document in `docs/designs/`, reviewed before any code.
+- **Status (2026-11-25):** design approved (`docs/designs/unattended-testing.md`, PR #22). Built:
+  step 1 (guard), step 2 (`scripts/test.ps1`, L1), step 3 (L2 harness), step 4 (shared
+  fixtures), step 6 (docs). Open: step 5 (fork approval setting, needs repository admin) and
+  step 7 (the four follow-up issues). Do not mark F2 done before steps 5 and 7.
 
 ### F3 — Review blockers on the spec
 Fix these in `docs/SPEC.md` before more work packages start. Details are in the review file.

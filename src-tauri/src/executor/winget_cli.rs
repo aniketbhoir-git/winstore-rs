@@ -244,7 +244,13 @@ pub fn pin_args(id: &str, add: bool) -> Vec<String> {
 
 /// Last line of defence: no code path may hand these flags to winget.
 pub fn guard_args(args: &[String]) -> AppResult<()> {
-    match args.iter().find(|a| FORBIDDEN_FLAGS.contains(&a.as_str())) {
+    // Exact matches and the `--flag=value` form.
+    let forbidden = |a: &&String| {
+        FORBIDDEN_FLAGS
+            .iter()
+            .any(|f| a.as_str() == *f || a.strip_prefix(f).is_some_and(|r| r.starts_with('=')))
+    };
+    match args.iter().find(forbidden) {
         Some(bad) => Err(AppError::InvalidConfig(format!(
             "refusing to pass {bad} to winget"
         ))),
@@ -1362,6 +1368,10 @@ mod tests {
         for f in FORBIDDEN_FLAGS {
             let err = guard_args(&["install".into(), f.into()]).unwrap_err();
             assert_eq!(err.code(), "invalid_config");
+            // The `--flag=value` form is refused too; a longer flag name is not a match.
+            let eq = format!("{f}=x");
+            assert!(guard_args(&["install".into(), eq]).is_err());
+            assert!(guard_args(&["install".into(), format!("{f}-other")]).is_ok());
         }
     }
 
