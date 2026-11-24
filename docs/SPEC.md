@@ -200,6 +200,7 @@ Non-goals:
 | HTTP | reqwest + serde/serde_json |
 | Persistence | SQLite via sqlx (async) with embedded migrations |
 | Windows APIs | official `windows` crate (notifications, AppModel) |
+| UI tests (dev only) | Vitest with `jsdom`, `@testing-library/svelte` and `mockIPC` from `@tauri-apps/api/mocks`. Dev dependencies of `ui/`; none ships in the app. See §8 and `docs/designs/unattended-testing.md`. |
 | Install/remove engine | winget CLI invoked as a subprocess for install/update/remove |
 | Logging | tracing; operation log mirrored into SQLite |
 | Minimum Windows version | Windows 11 23H2 (build 22631). Maintainer decision of 2026-11-12: the minimum is the version on the maintainer devices. Only one device was read; a lower build on another device lowers this value. |
@@ -983,19 +984,16 @@ user click for a list of packages satisfies hard rule 4.
 - **In-process:** `FakeExec` (`ipc/test_support.rs`) implements `PackageExecutor` with no
   subprocess, for service and command tests. It ignores its request, so it cannot test flags.
   This document does not use "the fake winget" for the two.
-- **Real winget (CI or a sandbox only):** install→verify→uninstall a tiny open-source package.
-  A test must never install software on a contributor machine outside a sandbox or a CI
-  runner. *Planned (F2, #21):* a guard in the test code refuses to run outside CI or a
-  sandbox. `docs/designs/unattended-testing.md` defines what the guard detects. Today the one
-  real test (`tests/winget_smoke.rs`) has only an `#[ignore]` mark; do not run it on a
-  contributor machine.
-- **No required manual step.** All required tests run unattended, for contributors also
-  (requirement F2, #21). `docs/designs/unattended-testing.md` is the draft design for the test
-  levels, the UI tests and the guard; it is not approved yet. Where it and this section
-  disagree after its approval, the design document is correct.
-- Checks with no automated test yet (elevation prompt, cancel during a download, offline
-  behavior, no network call outside hard rule 5) are open items of that design, not a manual
-  gate.
+- **Real winget:** only on a GitHub-hosted runner. The guard in `tests/winget_smoke.rs`
+  refuses each other machine before any winget process starts, and `#[ignore]` keeps it out of
+  `cargo test`. See `docs/designs/unattended-testing.md`. No other test file may call
+  `WingetCli::connect` (checked by `tests/no_real_winget.rs`).
+- **Required tests:** L1 (Rust) and L2 (UI: Vitest, `jsdom`, `mockIPC`), through
+  `scripts/test.ps1`. The script writes `src-tauri/target/test-report.md`. No required manual
+  step. The shared IPC fixtures are in `src-tauri/tests/fixtures/ipc/`.
+- **Open checks:** the table in "Hand-over from SPEC §8" of
+  `docs/designs/unattended-testing.md` (elevation prompt, cancel during a real download,
+  offline UI state, no network call outside hard rule 5).
 
 ---
 

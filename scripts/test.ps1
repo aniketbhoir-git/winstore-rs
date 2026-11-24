@@ -1,5 +1,5 @@
 # One command for the required tests (docs/designs/unattended-testing.md).
-# Runs the UI build, then L1 (Rust). Writes src-tauri/target/test-report.md.
+# Runs the UI build, L2 (UI, Vitest), then L1 (Rust). Writes src-tauri/target/test-report.md.
 # Exit 0: each level passed. Exit 1: a level failed or a tool is absent.
 # Never runs ignored tests (the real-winget test stays out).
 $ErrorActionPreference = 'Continue'
@@ -28,7 +28,7 @@ function Invoke-Step([string]$dir, [string]$exe, [string[]]$arguments) {
 # --- UI build (the Tauri build embeds ui/dist) ---
 $uiOk = $true
 if (-not (Test-Tool 'npm')) {
-    $lines.Add('L1 Rust: fail (npm not found)'); $failed = $true; $uiOk = $false
+    $lines.Add('L2 UI: fail (npm not found)'); $lines.Add('L1 Rust: fail (npm not found)'); $failed = $true; $uiOk = $false
 } else {
     $nm = Join-Path $ui 'node_modules'
     $lock = Join-Path $ui 'package-lock.json'
@@ -42,7 +42,23 @@ if (-not (Test-Tool 'npm')) {
         $r = Invoke-Step $ui 'npm' @('run', 'build')
         if ($r.Code -ne 0) { $uiOk = $false }
     }
-    if (-not $uiOk) { $lines.Add('L1 Rust: fail (UI build failed)'); $failed = $true }
+    if (-not $uiOk) { $lines.Add('L2 UI: fail (UI install or build failed)'); $lines.Add('L1 Rust: fail (UI build failed)'); $failed = $true }
+}
+
+# --- L2 UI ---
+if ($uiOk) {
+    $r = Invoke-Step $ui 'npm' @('test')
+    # Vitest prints ANSI colour codes on Windows; strip them before matching.
+    $out = [regex]::Replace([string]$r.Output, "\x1b\[[0-9;]*m", '')
+    if ($r.Code -eq 0) {
+        $m = [regex]::Match($out, '(?m)^\s*Tests\s+(\d+) passed')
+        $n = if ($m.Success) { $m.Groups[1].Value } else { '?' }
+        $lines.Add("L2 UI: pass ($n passed)")
+    } else {
+        $lines.Add('L2 UI: fail'); $failed = $true
+        $names = [regex]::Matches($out, '(?m)^\s*FAIL\s+(.+)$') | ForEach-Object { $_.Groups[1].Value.Trim() } | Select-Object -Unique
+        foreach ($nm in $names) { $lines.Add("  - $nm") }
+    }
 }
 
 # --- L1 Rust ---
