@@ -217,8 +217,119 @@ fn call_args(text: &str, open: usize) -> &str {
     &text[open + 1..]
 }
 
+/// `text` with the inside of string and char literals blanked, so a path such as
+/// `"fake_exe"` in a literal does not pass for the fake.
+fn blank_literals(text: &str) -> String {
+    let b = text.as_bytes();
+    let mut out = b.to_vec();
+    let mut i = 0;
+    while i < b.len() {
+        match skip_token(b, i) {
+            Some((j, false)) => {
+                for byte in out.iter_mut().take(j.saturating_sub(1)).skip(i + 1) {
+                    if *byte != b'\n' {
+                        *byte = b' ';
+                    }
+                }
+                i = j;
+            }
+            Some((j, true)) => i = j,
+            None => i += 1,
+        }
+    }
+    String::from_utf8(out).unwrap_or_default()
+}
+
+/// The innermost `fn` of `code` that contains byte `pos`; all of `code` when there is none.
+fn enclosing_fn(code: &str, pos: usize) -> &str {
+    let b = code.as_bytes();
+    let mut best: Option<(usize, usize)> = None;
+    let mut from = 0;
+    while let Some(at) = code[from..].find("fn ") {
+        let start = from + at;
+        from = start + 3;
+        if start > 0 && (b[start - 1].is_ascii_alphanumeric() || b[start - 1] == b'_') {
+            continue;
+        }
+        let Some(open) = code[start..].find('{').map(|o| start + o) else {
+            continue;
+        };
+        let close = matching_brace(b, open);
+        if start <= pos && pos <= close && best.is_none_or(|(s, _)| start > s) {
+            best = Some((start, close));
+        }
+    }
+    best.map_or(code, |(s, e)| &code[s..(e + 1).min(code.len())])
+}
+
+/// First top-level argument of the call whose `(` is at `open`, literals blanked.
+fn first_arg(code: &str, open: usize) -> String {
+    let args = blank_literals(call_args(code, open));
+    let (mut depth, mut end) = (0i32, args.len());
+    for (i, c) in args.char_indices() {
+        match c {
+            '(' | '[' | '{' => depth += 1,
+            ')' | ']' | '}' => depth -= 1,
+            ',' if depth == 0 => {
+                end = i;
+                break;
+            }
+            _ => {}
+        }
+    }
+    args[..end].to_string()
+}
+
+/// A path that never reaches the real winget: it comes from the fake, or from a temp dir
+/// that the same function created.
+fn path_is_safe(arg: &str, fn_body: &str) -> bool {
+    if arg.contains("fake_exe") {
+        return true;
+    }
+    let mut rest = arg;
+    while let Some(at) = rest.find(".path()") {
+        let mut ident: Vec<char> = rest[..at]
+            .chars()
+            .rev()
+            .take_while(|c| c.is_alphanumeric() || *c == '_')
+            .collect();
+        ident.reverse();
+        let ident: String = ident.into_iter().collect();
+        let made = fn_body
+            .match_indices(&format!("let {ident} ="))
+            .any(|(i, _)| {
+                let line = fn_body[i..].lines().next().unwrap_or("");
+                line.contains("tempdir(") || line.contains("TempDir::new(")
+            });
+        if !ident.is_empty() && made {
+            return true;
+        }
+        rest = &rest[at + 7..];
+    }
+    false
+}
+
+/// True when some call of `name(` has a first argument that is not a safe path.
+fn has_unsafe_path_call(code: &str, name: &str) -> bool {
+    let b = code.as_bytes();
+    let mut from = 0;
+    while let Some(at) = code[from..].find(name) {
+        let start = from + at;
+        let open = start + name.len() - 1;
+        from = start + name.len();
+        // `name` must not be the tail of a longer identifier.
+        if start > 0 && (b[start - 1].is_ascii_alphanumeric() || b[start - 1] == b'_') {
+            continue;
+        }
+        if !path_is_safe(&first_arg(code, open), enclosing_fn(code, start)) {
+            return true;
+        }
+    }
+    false
+}
+
 /// Names of the patterns that `test_code` (comment-free) breaks. `file` is the whole file
-/// the code is from, for the rules that depend on it.
+/// the code is from, for the one rule that depends on it.
 fn violations(test_code: &str, file: &str) -> Vec<&'static str> {
     let cli = p(&["Winget", "Cli"]);
     let mut found = Vec::new();
@@ -231,20 +342,14 @@ fn violations(test_code: &str, file: &str) -> Vec<&'static str> {
     if test_code.contains(&p(&[&cli, "::discover"])) {
         found.push("discover");
     }
-    let connect_at = p(&["connect", "_at("]);
-    let mut from = 0;
-    while let Some(at) = test_code[from..].find(&connect_at) {
-        let open = from + at + connect_at.len() - 1;
-        let args = call_args(test_code, open);
-        // A path from the fake or from a temp dir never reaches the real winget.
-        if !["fake_exe", "dir.path()", "tempdir", "tmp.path()"]
-            .iter()
-            .any(|ok| args.contains(ok))
-        {
-            found.push("connect_at with a real path");
-            break;
-        }
-        from = open + 1;
+    if has_unsafe_path_call(test_code, &p(&["connect", "_at("])) {
+        found.push("connect_at with a real path");
+    }
+    if has_unsafe_path_call(test_code, &p(&[&cli, "::new("])) {
+        found.push("new with a real path");
+    }
+    if test_code.contains(&p(&[&cli, "Source::new("])) {
+        found.push("source defaults to discover");
     }
     if test_code.contains(&p(&[&cli, " as "])) {
         found.push("renamed import");
@@ -252,25 +357,34 @@ fn violations(test_code: &str, file: &str) -> Vec<&'static str> {
     if test_code.contains(&p(&["AppState", "::new("])) {
         found.push("default state");
     }
-    let builds_fake = ["with_core(", "state_with(", "Core::new("]
-        .iter()
-        .any(|b| file.contains(b));
-    if test_code.contains(".core()") && !builds_fake {
-        found.push("core without a fake executor");
+    let mut from = 0;
+    while let Some(at) = test_code[from..].find(&p(&[".co", "re()"])) {
+        let pos = from + at;
+        from = pos + 1;
+        let body = enclosing_fn(test_code, pos);
+        if !["with_core(", "state_with(", "Core::new("]
+            .iter()
+            .any(|b| body.contains(b))
+        {
+            found.push("core without a fake executor");
+            break;
+        }
     }
     found
 }
 
-fn is_test_file(path: &Path, test_mods: &BTreeSet<String>) -> bool {
-    let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
-    let dir = path
+/// `rel` is relative to the crate root. Any `tests` component, `test_support.rs` and the
+/// modules declared `#[cfg(test)] mod x;` are test code.
+fn is_test_file(rel: &Path, test_mods: &BTreeSet<String>) -> bool {
+    let stem = rel.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+    let dir = rel
         .parent()
         .and_then(|d| d.file_name())
         .and_then(|d| d.to_str())
         .unwrap_or("");
-    stem == "tests"
+    rel.components().any(|c| c.as_os_str() == "tests")
+        || stem == "tests"
         || stem == "test_support"
-        || dir == "tests"
         || test_mods.contains(stem)
         || (stem == "mod" && test_mods.contains(dir))
 }
@@ -298,7 +412,8 @@ fn scan_tree(root: &Path) -> Vec<String> {
         {
             continue;
         }
-        let code = if is_test_file(path, &test_mods) {
+        let rel = path.strip_prefix(root).unwrap_or(path);
+        let code = if is_test_file(rel, &test_mods) {
             vec![text.clone()]
         } else {
             cfg_test_modules(text).0
@@ -328,6 +443,8 @@ fn sample(text: &str) -> String {
     text.replace('@', &p(&["Winget", "Cli"]))
         .replace('%', &p(&["App", "State"]))
         .replace('$', &p(&["connect", "_at"]))
+        .replace('~', "core")
+        .replace('^', &p(&["Winget", "CliSource"]))
 }
 
 fn flagged(code: &str) -> Vec<&'static str> {
@@ -353,11 +470,33 @@ fn scanner_flags_each_real_winget_pattern() {
         ["renamed import"]
     );
     assert_eq!(
-        flagged("let s = %::new(); let c = s.core().await;"),
+        flagged("let c = @::new(real_path, o);"),
+        ["new with a real path"]
+    );
+    assert_eq!(
+        flagged("let c = ^::new();"),
+        ["source defaults to discover"]
+    );
+    // A literal that says "fake_exe" is not the fake; the temp dir of another function is
+    // not this function's temp dir; `core()` needs a fake state in its own function.
+    assert_eq!(
+        flagged("fn t() { @::$(\"fake_exe\", o) }"),
+        ["connect_at with a real path"]
+    );
+    assert_eq!(
+        flagged("fn a() { let dir = tempfile::tempdir(); } fn b() { @::$(dir.path(), o) }"),
+        ["connect_at with a real path"]
+    );
+    assert_eq!(
+        flagged("fn a() { let s = state_with(f); } fn b() { let c = s.~(); }"),
+        ["core without a fake executor"]
+    );
+    assert_eq!(
+        flagged("let s = %::new(); let c = s.~().await;"),
         ["default state", "core without a fake executor"]
     );
     assert_eq!(
-        flagged("let c = state.core().await;"),
+        flagged("let c = state.~().await;"),
         ["core without a fake executor"]
     );
 }
@@ -365,8 +504,11 @@ fn scanner_flags_each_real_winget_pattern() {
 #[test]
 fn scanner_accepts_the_fake_and_ignores_comments() {
     assert!(flagged("@::$(fake_exe(), o).await").is_empty());
-    assert!(flagged("@::$(dir.path().join(\"absent.exe\"), o)").is_empty());
-    assert!(flagged("let s = state_with(f); s.core().await").is_empty());
+    let tmp = "fn t() { let dir = tempfile::tempdir().unwrap(); ";
+    assert!(flagged(&format!("{tmp}@::$(dir.path().join(\"absent.exe\"), o) }}")).is_empty());
+    assert!(flagged(&format!("{tmp}@::new(dir.path().join(\"x\"), o) }}")).is_empty());
+    assert!(flagged("let c = @::new(fake_exe(), o);").is_empty());
+    assert!(flagged("let s = state_with(f); s.~().await").is_empty());
     assert!(flagged("// @::connect(o) in a comment\nlet x = 1;").is_empty());
     assert!(flagged("/* @::discover() */ let x = 1;").is_empty());
 }
@@ -389,5 +531,10 @@ fn scanner_reads_only_test_code_of_a_source_file() {
     assert!(is_test_file(Path::new("src/x/split.rs"), &mods));
     assert!(is_test_file(Path::new("src/x/split/mod.rs"), &mods));
     assert!(is_test_file(Path::new("src/x/tests.rs"), &mods));
+    assert!(is_test_file(Path::new("tests/common/mod.rs"), &mods));
+    assert!(is_test_file(
+        Path::new("tests/common/helpers/util.rs"),
+        &mods
+    ));
     assert!(!is_test_file(Path::new("src/x/other.rs"), &mods));
 }

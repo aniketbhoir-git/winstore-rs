@@ -660,7 +660,9 @@ async fn failed_cancel_then_the_real_outcome_settles_the_ledger() {
 // Between the executor releasing its lock and the ledger update, `active` still blocks a
 // second operation: the package is only free once the ledger is settled. The test watches
 // `status().active` while the outcome is settled: whenever it reads empty, the ledger row
-// must already be `Installed`. Moving `active.finish` before `settle` makes this fail.
+// must already be `Installed`. This is a polling check, not a proof: it catches
+// `active.finish` moving before `settle` only when the poll runs inside the window between
+// the two (it did when the order was swapped locally), so a pass is evidence, not a guarantee.
 #[tokio::test]
 async fn package_is_free_only_after_the_ledger_is_settled() {
     let exec = Arc::new(FakeExec::holding());

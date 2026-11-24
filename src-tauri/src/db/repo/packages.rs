@@ -12,7 +12,8 @@ const UPSERT_SUMMARY: &str = "INSERT INTO packages (source, package_id, name, pu
     description = COALESCE(NULLIF(excluded.description, ''), description), \
     icon_url = excluded.icon_url, \
     rating = excluded.rating, rating_count = excluded.rating_count, \
-    is_paid = excluded.is_paid, packaging = CASE WHEN excluded.packaging = 'unknown' THEN packaging \n    ELSE excluded.packaging END, \
+    is_paid = excluded.is_paid, packaging = CASE WHEN excluded.packaging = 'unknown' THEN packaging \
+    ELSE excluded.packaging END, \
     fetched_at = excluded.fetched_at";
 
 /// `detail_fetched_at` is `Some` only for a detail write; a summary write keeps the old one.
