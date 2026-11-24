@@ -12,3 +12,4 @@ SHA256 in `show-vlc.txt` is a placeholder. English Windows layout only.
 - `search-same-name.txt` - two packages with one name, and the cut-list footer (`<...`).
 - `show-vlc.txt` - `winget show --id VideoLAN.VLC --exact --source winget`.
 - `install-piped.txt` - `winget install` stdout when piped (1.29.240 and newer): stage lines only, no spinner, no bar. Used with the fake winget `file` directive. **Hand-made from the documented stage lines, not captured**; verify against real winget 1.29.240+ (CRLF in the working copy; git may store LF, the parser splits on both).
+- `show-multiline.txt` - a show where `Description:` and `Release Notes:` stand alone on their key line and the value follows, indented two spaces.

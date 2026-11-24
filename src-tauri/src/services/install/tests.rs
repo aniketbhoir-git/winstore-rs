@@ -6,7 +6,7 @@ use std::time::Duration;
 use super::*;
 use crate::db::repo::{installs, operation_log};
 use crate::domain::{InstallRecord, InstallState, OperationStage, SourceKind};
-use crate::executor::{InstallRequest, PackageExecutor};
+use crate::executor::InstallRequest;
 use crate::ipc::events::testing::RecordingSink;
 use crate::ipc::events::EVENT_OPERATION_FINISHED;
 use crate::ipc::state::AppState;
@@ -658,7 +658,11 @@ async fn failed_cancel_then_the_real_outcome_settles_the_ledger() {
 }
 
 // Between the executor releasing its lock and the ledger update, `active` still blocks a
-// second operation: the package is only free once the ledger is settled.
+// second operation: the package is only free once the ledger is settled. The test watches
+// `status().active` while the outcome is settled: whenever it reads empty, the ledger row
+// must already be `Installed`. This is a polling check, not a proof: it catches
+// `active.finish` moving before `settle` only when the poll runs inside the window between
+// the two (it did when the order was swapped locally), so a pass is evidence, not a guarantee.
 #[tokio::test]
 async fn package_is_free_only_after_the_ledger_is_settled() {
     let exec = Arc::new(FakeExec::holding());
@@ -666,29 +670,23 @@ async fn package_is_free_only_after_the_ledger_is_settled() {
     let started = start_install(&core, sink_of(&sink), id(), InstallRequest::default())
         .await
         .unwrap();
+    assert!(status(&core, &id()).await.unwrap().active.is_some());
     exec.finish_held(&started.operation_id, OperationStage::Done, Ok(()));
-    for _ in 0..500 {
-        match start_uninstall(&core, sink_of(&sink), id()).await {
-            // Refused while the first operation is still being settled.
-            Err(e) => {
-                assert_eq!(e.code(), "unsupported");
-                tokio::task::yield_now().await;
-            }
-            // Accepted: the install must already be recorded.
-            Ok(second) => {
-                assert_eq!(
-                    installs::get(&pool, &id())
-                        .await
-                        .unwrap()
-                        .unwrap()
-                        .installed_version
-                        .as_deref(),
-                    Some("1.2.3")
-                );
-                exec.cancel(&second.operation_id).await.unwrap();
-                return;
-            }
+    for _ in 0..5000 {
+        let free = status(&core, &id()).await.unwrap().active.is_none();
+        let rec = ledger(&pool).await;
+        if free {
+            assert_eq!(
+                rec.state,
+                InstallState::Installed,
+                "the package was free before the ledger was settled"
+            );
+            assert_eq!(rec.installed_version.as_deref(), Some("1.2.3"));
+            // Free means the finish event is (about to be) out.
+            finished(&sink, 1).await;
+            return;
         }
+        tokio::task::yield_now().await;
     }
     panic!("package never became free");
 }

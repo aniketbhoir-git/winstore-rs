@@ -1179,3 +1179,44 @@ async fn catalog_time_limit_names_the_limit() {
     let err = fx.cli.show_package("A.B").await.unwrap_err();
     assert!(err.to_string().contains("300 ms"), "{err}");
 }
+
+// A read-only call that runs into its time limit stops the whole process tree, not only
+// winget.exe: the grandchild of the fake is gone too.
+#[cfg(windows)]
+#[tokio::test]
+async fn catalog_time_limit_stops_the_process_tree() {
+    let dir = tempfile::tempdir().unwrap();
+    let child_pid = dir.path().join("child.txt");
+    let fx = Fx::build(
+        "child 60000
+sleep 60000
+",
+        &[("FAKE_WINGET_CHILD_PID", child_pid.to_str().unwrap())],
+        None,
+    )
+    .with_limits(Duration::from_millis(2000), Duration::from_millis(2000));
+    let err = fx.cli.search_catalog("vlc", 30).await.unwrap_err();
+    assert_eq!(err.code(), "source_unavailable");
+    let child = std::fs::read_to_string(&child_pid).expect("the fake started no grandchild");
+    let alive = |pid: &str| {
+        let out = std::process::Command::new("tasklist")
+            .args(["/FI", &format!("PID eq {}", pid.trim()), "/NH"])
+            .output()
+            .unwrap();
+        String::from_utf8_lossy(&out.stdout).contains("fake_winget")
+    };
+    let mut gone = false;
+    for _ in 0..50 {
+        if !alive(&child) {
+            gone = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert!(
+        gone,
+        "grandchild {child} still running after the time limit"
+    );
+    let parent = std::fs::read_to_string(fx.dir.path().join("pid.txt")).unwrap();
+    assert!(!alive(&parent), "winget {parent} still running");
+}

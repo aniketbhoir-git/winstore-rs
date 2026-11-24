@@ -90,8 +90,8 @@ impl Default for WingetCliSource {
 fn packaging(installer_type: Option<&str>) -> PackagingKind {
     match installer_type.map(str::to_ascii_lowercase).as_deref() {
         Some("msix") => PackagingKind::Msix,
-        Some("msi") => PackagingKind::Msi,
-        Some("exe") => PackagingKind::Exe,
+        Some("msi" | "wix") => PackagingKind::Msi,
+        Some("exe" | "nullsoft" | "inno" | "burn") => PackagingKind::Exe,
         Some("portable") => PackagingKind::Portable,
         _ => PackagingKind::Unknown,
     }
@@ -242,14 +242,18 @@ mod tests {
             d.versions["3.0.21"].release_date.as_deref(),
             Some("2024-06-19")
         );
-        assert_eq!(d.installer.install_type, PackagingKind::Unknown);
+        assert_eq!(d.installer.install_type, PackagingKind::Exe);
     }
 
     #[test]
     fn installer_types_map() {
         assert_eq!(packaging(Some("MSIX")), PackagingKind::Msix);
         assert_eq!(packaging(Some("portable")), PackagingKind::Portable);
-        assert_eq!(packaging(Some("wix")), PackagingKind::Unknown);
+        for exe in ["nullsoft", "inno", "burn", "Nullsoft"] {
+            assert_eq!(packaging(Some(exe)), PackagingKind::Exe, "{exe}");
+        }
+        assert_eq!(packaging(Some("wix")), PackagingKind::Msi);
+        assert_eq!(packaging(Some("zip")), PackagingKind::Unknown);
         assert_eq!(packaging(None), PackagingKind::Unknown);
     }
 }
