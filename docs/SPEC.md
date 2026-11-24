@@ -342,8 +342,12 @@ The values of `Operation` and `OperationStage` are shown as their wire strings.
   available versions. *Planned (with case (b), F4; §6.6):* `license_url` (optional), from the
   catalog data. It only feeds `agreement_url`.
 - `ProgressEvent`: operation id, package id, operation kind, stage, fraction (0.0–1.0),
-  message, timestamp, and `cancel_failed` (boolean, default false; *built on the branch*,
-  §6.7 gap table).
+  message, timestamp, `cancel_failed` (boolean, default false; *built on the branch*,
+  §6.7 gap table) and `indeterminate` (boolean, default false). `indeterminate` is true while
+  winget has shown no download bar for the operation (since winget 1.29.240 it prints none to a
+  pipe). `fraction` then is only a stage estimate that keeps the stream monotonic; the UI draws
+  an animated bar with no value and shows `message` (winget's stage line). It turns false with
+  the first bar line, and on the terminal event.
 - `UpdateAvailable`: package id, installed version, latest version, source, is_auto. `is_auto`
   is reserved: no work package defines automatic updates.
 - `OperationStarted`: operation id.
@@ -438,6 +442,11 @@ disable. The `consent` option of §6.6 is also not built; the table marks it *pl
 | `store:search-failed` | `search_id`, `error` |
 | `store:operation-finished` | `operation_id`, `package_id`, `ok`, `error?` |
 | `store:updates-summary` | `total`, `succeeded`, `failed`, `outcomes` |
+
+`store:progress` carries `indeterminate` (§4.2): with winget 1.29.240 and newer the stream holds
+stage lines only (`Found …`, `Downloading <url>`, hash check, `Starting package install...`,
+`Successfully installed`), each as `message`, and every event but the terminal one is
+`indeterminate`.
 
 For each operation, the last `store:progress` event carries the terminal stage. Then
 `services/install.rs` settles the ledger. Then it emits `store:operation-finished`. A cancel gives `ok = false` with

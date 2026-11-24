@@ -44,6 +44,7 @@ Contract: SPEC §5.2, §6.2, §6.3, §8.
 | `--include-unknown` | upgrade/list: include packages whose installed version is unknown (update checks, SPEC §6.3). |
 | `--include-pinned` | Do not pass; pinned packages are skipped (Issue #7). |
 | Encoding | Piped stdout is UTF-8 (`String::from_utf8_lossy`). Lines end `\r\n`. Output contains non-ASCII (bar glyphs, localized names). |
+| Piped output (1.29.240+) | Since winget 1.29.160-preview (stable 1.29.240) winget prints no spinner and no bar when stdout is a pipe (ADR 0001 measured 1.29.380). Only stage lines arrive. Do not pass `--no-progress` below 1.29.240. The parser marks events `indeterminate` until a bar line is seen (SPEC §4.2); the UI draws an animated bar. Fixture: `tests/fixtures/winget/1.29/install-piped.txt`. COM-API progress is later work (#23). |
 | Redraw noise | winget rewrites lines with `\r` for spinners (`- \ \| /`). Split on both `\r` and `\n`; drop single-char spinner lines. |
 
 ## Command lines
@@ -83,6 +84,10 @@ The bar line, license notices, `Installer failed with exit code` and the agreeme
 | `Installer failed with exit code: <n>` | Failed | `WingetFailed{code=n}` |
 | `Do you agree to all the source agreements terms?` | blocked | exit 0x8A150046 |
 | package-agreement prompt | blocked | exit 0x8A150041 |
+
+The bar line only appears on winget older than 1.29.240 (or a console). Without it the fraction
+is a stage estimate: `ProgressUpdate.indeterminate` / `ProgressEvent.indeterminate` stay true
+until the first bar line.
 
 Emit the terminal event exactly once, after the process exits: `Done` for 0, else `Failed` / `Cancelled`.
 Bar glyphs: filled `█`, empty `▒`. With no byte counts, use filled cells over total cells.

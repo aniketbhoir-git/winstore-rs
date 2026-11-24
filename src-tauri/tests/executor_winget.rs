@@ -163,6 +163,71 @@ async fn install_streams_every_stage_and_finishes_once() {
     );
 }
 
+/// winget 1.29.240+ piped layout: stage lines only, no spinner and no bar.
+#[tokio::test]
+async fn install_with_no_bar_streams_every_stage_and_reports_indeterminate() {
+    let script = format!(
+        "file {}
+exit 0
+",
+        fixture("install-piped.txt")
+    );
+    let fx = Fx::new(&script);
+    let h = fx
+        .cli
+        .install(&pkg("Vendor.SomeApp"), &InstallRequest::default())
+        .await
+        .unwrap();
+    let (events, outcome) = collect(h).await;
+    outcome.unwrap();
+
+    let mut stages: Vec<_> = events.iter().map(|e| e.stage).collect();
+    stages.dedup();
+    use OperationStage::*;
+    assert_eq!(
+        stages,
+        [Queued, Resolving, Downloading, Installing, Finalizing, Done]
+    );
+    assert_one_terminal_last(&events);
+    assert_monotonic(&events);
+    // Every stage line is relayed as its message.
+    for needle in [
+        "Found Some App",
+        "Downloading https://",
+        "Successfully verified installer hash",
+        "Starting package install",
+        "Successfully installed",
+    ] {
+        assert!(
+            events.iter().any(|e| e.message.starts_with(needle)),
+            "no event for {needle}: {events:#?}"
+        );
+    }
+    let (last, running) = events.split_last().unwrap();
+    assert!(running.iter().all(|e| e.indeterminate), "{running:#?}");
+    assert_eq!(last.stage, Done);
+    assert!(!last.indeterminate);
+    assert_eq!(last.fraction, 1.0);
+}
+
+#[tokio::test]
+async fn install_with_a_bar_is_not_indeterminate_once_the_bar_shows() {
+    let fx = Fx::new(FULL_INSTALL);
+    let h = fx
+        .cli
+        .install(&pkg("Vendor.SomeApp"), &InstallRequest::default())
+        .await
+        .unwrap();
+    let (events, outcome) = collect(h).await;
+    outcome.unwrap();
+    let first_bar = events
+        .iter()
+        .position(|e| e.stage == OperationStage::Downloading && e.fraction > 0.11)
+        .expect("a bar event");
+    assert!(events[..first_bar].iter().all(|e| e.indeterminate));
+    assert!(events[first_bar..].iter().all(|e| !e.indeterminate));
+}
+
 #[tokio::test]
 async fn install_passes_no_agreement_flag_in_any_case() {
     let fx = Fx::new("exit 0\n");

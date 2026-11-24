@@ -1,6 +1,7 @@
 {
   "cancel_failed": false,
   "fraction": 0.5,
+  "indeterminate": false,
   "message": "Downloading",
   "operation": "install",
   "operation_id": "op-1",

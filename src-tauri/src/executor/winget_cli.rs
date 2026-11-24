@@ -456,11 +456,17 @@ struct OpCtx {
     tx: mpsc::Sender<ProgressEvent>,
     notify: Arc<Notify>,
     /// Stage and fraction of the last event that reached the channel.
-    last_sent: Mutex<(OperationStage, f32)>,
+    last_sent: Mutex<(OperationStage, f32, bool)>,
 }
 
 impl OpCtx {
-    fn event(&self, stage: OperationStage, fraction: f32, msg: &str) -> ProgressEvent {
+    fn event(
+        &self,
+        stage: OperationStage,
+        fraction: f32,
+        msg: &str,
+        indeterminate: bool,
+    ) -> ProgressEvent {
         ProgressEvent::new(
             self.op_id.clone(),
             self.package.clone(),
@@ -469,14 +475,17 @@ impl OpCtx {
             fraction,
             msg,
         )
+        .with_indeterminate(indeterminate)
     }
 
     /// Progress is lossy-safe (fractions are monotonic), so it is dropped when the consumer
     /// lags. The last free slot is reserved for the terminal event, which is the only sender
     /// of the final slot, so exactly one terminal event always fits.
-    fn progress(&self, stage: OperationStage, fraction: f32, msg: &str) {
-        if self.tx.capacity() > 1 && self.tx.try_send(self.event(stage, fraction, msg)).is_ok() {
-            *self.last_sent.lock().unwrap_or_else(|e| e.into_inner()) = (stage, fraction);
+    fn progress(&self, stage: OperationStage, fraction: f32, msg: &str, indeterminate: bool) {
+        let ev = self.event(stage, fraction, msg, indeterminate);
+        if self.tx.capacity() > 1 && self.tx.try_send(ev).is_ok() {
+            *self.last_sent.lock().unwrap_or_else(|e| e.into_inner()) =
+                (stage, fraction, indeterminate);
         }
     }
 
@@ -485,8 +494,9 @@ impl OpCtx {
     /// Returns false when there was no room in time. A closed channel has no reader to tell,
     /// so it counts as sent.
     async fn cancel_failed(&self) -> bool {
-        let (stage, fraction) = *self.last_sent.lock().unwrap_or_else(|e| e.into_inner());
-        let mut ev = self.event(stage, fraction, CANCEL_FAILED_MESSAGE);
+        let (stage, fraction, indeterminate) =
+            *self.last_sent.lock().unwrap_or_else(|e| e.into_inner());
+        let mut ev = self.event(stage, fraction, CANCEL_FAILED_MESSAGE, indeterminate);
         ev.cancel_failed = true;
         let wait = async {
             // Only this task sends, so a free slot stays free until we use it.
@@ -694,10 +704,10 @@ impl WingetCli {
             version,
             tx,
             notify,
-            last_sent: Mutex::new((OperationStage::Queued, 0.0)),
+            last_sent: Mutex::new((OperationStage::Queued, 0.0, true)),
         };
-        ctx.progress(OperationStage::Queued, 0.0, "queued");
-        ctx.progress(OperationStage::Resolving, 0.0, "starting winget");
+        ctx.progress(OperationStage::Queued, 0.0, "queued", true);
+        ctx.progress(OperationStage::Resolving, 0.0, "starting winget", true);
         let stdout = child.stdout.take();
         let stderr = child.stderr.take();
         tokio::spawn(async move {
@@ -962,7 +972,7 @@ async fn process_lines(ctx: &OpCtx, parser: &mut ProgressParser, lines: Vec<Stri
             ctx.log(LogLevel::Error, line.trim(), None).await;
         }
         if let Some(u) = parser.feed_line(&line) {
-            ctx.progress(u.stage, u.fraction, &u.message);
+            ctx.progress(u.stage, u.fraction, &u.message, u.indeterminate);
         }
     }
 }
@@ -1158,7 +1168,10 @@ async fn finish(
         }
     }
     // A slot is always free (see `progress`); this only fails if the receiver is gone.
-    let _ = ctx.tx.send(ctx.event(stage, fraction, &message)).await;
+    let _ = ctx
+        .tx
+        .send(ctx.event(stage, fraction, &message, false))
+        .await;
     ctx.inner
         .cancels
         .lock()

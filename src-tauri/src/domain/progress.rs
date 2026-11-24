@@ -57,6 +57,11 @@ pub struct ProgressEvent {
     /// True when a cancel could not stop the process tree (SPEC §6.7). The stage is unchanged.
     #[serde(default)]
     pub cancel_failed: bool,
+    /// True when winget has shown no progress bar for this operation, so `fraction` is only a
+    /// stage estimate and the UI must not draw it as a measured value (SPEC §4.2). winget
+    /// 1.29.240 and newer print no bar to a pipe.
+    #[serde(default)]
+    pub indeterminate: bool,
 }
 
 impl ProgressEvent {
@@ -83,7 +88,14 @@ impl ProgressEvent {
             message: message.into(),
             timestamp: now_unix(),
             cancel_failed: false,
+            indeterminate: false,
         }
+    }
+
+    /// Marks the fraction as an estimate with no measured total.
+    pub fn with_indeterminate(mut self, indeterminate: bool) -> Self {
+        self.indeterminate = indeterminate;
+        self
     }
 }
 
