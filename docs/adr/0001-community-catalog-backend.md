@@ -1,7 +1,8 @@
 # ADR 0001 — Community catalog backend
 
 - **Status:** accepted 2026-11-25 — option A, chosen by the orchestrator in GTAVI mode (owner
-  away); the owner may reverse it.
+  away); the owner may reverse it. Step 4 of the design changes SPEC §0 hard rule 2
+  (HTTPS only); the owner confirms before step 4 merges.
 - **Date:** 2026-11-11 (proposed); 2026-11-25 (accepted)
 - **Design:** `docs/designs/catalog-winget-cli.md`
 - **Closes when accepted:** F1 (GitHub #20), follow-up #16, review action A14.
@@ -95,7 +96,7 @@ step.
 The decision does not change. The CDN layout, the index schema and the container are still
 not a published interface. Nobody promises that they stay stable. The schema already moved
 from 1.x to 2.x, and a delta index is in development. Option B still fails the rule "public,
-documented interfaces only". Source: `research-drafts/catalog-sources.md` (2026-11-25).
+documented interfaces only". Source: `docs/research/2026-11-25-catalog-sources.md` (2026-11-25).
 
 ## Comparison
 

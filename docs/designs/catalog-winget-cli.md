@@ -6,6 +6,8 @@
 - **Issues:** F1 (GitHub #20), #16, review actions A14 and A15.
 - **Decision record:** `docs/adr/0001-community-catalog-backend.md`, option A, accepted
   2026-11-25 by the orchestrator in GTAVI mode (owner away). The owner may reverse it.
+- **Owner gate:** Step 4 changes SPEC §0 hard rule 2 (HTTPS only); the owner confirms before
+  step 4 merges.
 
 ## Objective
 
@@ -42,8 +44,10 @@ UI ──get_app_detail──▶ Catalog ──get_detail()──▶ WingetCliSo
                          winget_parse.rs: parse_columns(), parse_show()
 ```
 
-The coordinator (`Catalog`), its merge and its cache do not change. Only the adapter behind
-`CatalogSource` changes.
+The coordinator (`Catalog`) and its cache keep their shape. Only the adapter behind
+`CatalogSource` changes, plus two small changes in the coordinator: the merge rule in
+`catalog/search.rs` (section 3) and one new `Catalog` method for the cached detail
+(section 5).
 
 ## Design
 
@@ -104,6 +108,10 @@ Exit codes for the two calls:
 | `0x8A150046` (source agreements) | `agreements_required`, source kind, `winget_source` = `winget` | Same |
 | `0x8A150041` (package agreements) | Not expected. Same mapping as `map_exit()` | Same |
 | Time limit reached | `source_unavailable` ("winget did not answer in 15 s") | `source_unavailable` ("winget did not answer in 60 s") |
+
+`run_capture_timeout()` in `winget_cli.rs` builds the time-limit error today. It says "winget
+did not answer in time", with no number. Step 2 changes it to put the limit of the call in
+the message, as the table shows.
 | Any other | `map_exit()`, as today | Same |
 
 ### 3. Search: parse by column position
@@ -122,11 +130,13 @@ columns by position. It never reads a header word.
 5. A row is skipped, with a warning in the trace log, when:
    - a column start does not follow a space in that row (wide characters move the offsets;
      the existing `parse_table()` has the same rule);
-   - the cell at position 1 is empty, has a space in it, or ends with `…` (a cut id);
+   - the cell at position 1 is empty, has a space in it, has no `.` in it (every winget id
+     has a `.`), or ends with `…` (a cut id);
    - the cell at position 2 is empty.
-
-   This rule also drops a footer line, such as a note that winget cut the result list.
-6. The parser returns the rows and the warnings.
+6. The **cut-list footer** is detected on its own. winget prints a line that starts with `<`
+   when it cut the result list. The parser ends the data rows at the first line that starts
+   with `<`. It does not rely on the row rules above for this line.
+7. The parser returns the rows and the warnings.
 
 The search maps the cells by position:
 
@@ -141,9 +151,32 @@ The other summary fields: `publisher` and `description` are empty strings. `icon
 `rating` and `rating_count` are `None`. `is_paid` is false. `packaging` is `Unknown`. The
 detail fills publisher, description and packaging later.
 
+**A search row must not overwrite a stored publisher or description.** `UPSERT_SUMMARY` in
+`db/repo/packages.rs` sets `publisher` and `description` to `excluded.*` on conflict. A search
+row would then erase the values that an earlier `show` stored. Step 4 changes the conflict
+clause for these two columns: `publisher = COALESCE(NULLIF(excluded.publisher, ''),
+publisher)`, and the same for `description`. A non-empty stored value stays. A non-empty new
+value (from a detail write) replaces it. A test writes a detail, then a search row with empty
+fields, and checks that publisher and description stay.
+
+**Duplicates in the merge.** Today `merge()` in `catalog/search.rs` drops a later row when
+`dedupe_key()` (name and publisher) repeats. It does this across the flattened list, also for
+rows of one source. A winget search row has an empty publisher. Two packages with the same
+display name then collapse into one, and one of them cannot be found. Step 3 changes
+`catalog/search.rs`:
+
+1. Inside one source, `merge()` dedupes by `(source, id)` only.
+2. Across sources, `merge()` applies the name-and-publisher rule only when both rows have a
+   non-empty publisher. A row with an empty publisher is never dropped by this rule.
+
+`dedupe_key()` returns `None` for an empty publisher. A unit test in `search.rs` uses two
+winget rows with the same name and different ids and an empty publisher; both stay. A second
+test keeps the old cross-source case (same name and non-empty publisher in two sources gives
+one row). The fixture `search-same-name.txt` (see "Tests") feeds the integration test.
+
 The result keeps winget's order. `SortOrder::Relevance` in the coordinator keeps it too.
 winget puts an exact id, name or moniker match before a substring match. For "vlc", the
-moniker `vlc` puts `VideoLAN.VLC` first (`research-drafts/search-ranking.md`).
+moniker `vlc` puts `VideoLAN.VLC` first (`docs/research/2026-11-25-search-ranking.md`).
 
 ### 4. Detail: parse the `winget show` block
 
@@ -194,7 +227,11 @@ took 0.3 s.
 5. `start_install` uses the cached detail when one exists, also when it is expired. It needs
    the detail only for the paid check and the target version. A community package is never
    paid, and winget installs by exact id. With no cached detail it calls `get_detail()` as
-   today. This builds the planned part of SPEC §6.2, step 1.
+   today. This builds the planned part of SPEC §6.2, step 1. Code: a new public method
+   `Catalog::cached_detail_any_age(&self, id: &PackageId) -> Option<PackageDetail>` in
+   `catalog/mod.rs` (where `Catalog` and the private `cached_detail()` live). It reads the
+   `packages` row and ignores `detail_fetched_at`. `start_install` in `services/install.rs`
+   calls it first and falls back to `get_detail()`.
 6. Condition 2 of ADR 0001: before the fix merges, measure the first `show` on a second
    machine (see step 6 of the plan). If each machine shows 20 s or more, the owner reopens
    option D or E.
@@ -205,8 +242,8 @@ SPEC §6.6, "Read-only calls", requires this work to define the consent step for
 detail before code. The step is: **no consent step; the calls fail closed.**
 
 1. The calls name `--source winget`. The `winget` community source declares no source
-   agreement. Only `msstore` does in a default winget setup (`research-drafts/
-   install-progress-and-agreements.md`, section 3).
+   agreement. Only `msstore` does in a default winget setup (`docs/research/
+   2026-11-25-install-progress-and-agreements.md`, section 3).
 2. `search` and `show` never install, so winget does not ask for package agreements. `show`
    can print an "Agreements" block as data; the parser ignores it.
 3. `--disable-interactivity` turns any prompt into "not accepted" and an exit code. winget
@@ -225,11 +262,15 @@ detail before code. The step is: **no consent step; the calls fail closed.**
 ### 7. Minimum version and the non-English limit
 
 - **Minimum winget 1.29** (SPEC §2). `MIN_VERSION` in `winget_parse.rs` changes from 1.6 to
-  1.29. `probe()` then returns `unsupported` ("winget 1.29 or newer is necessary") for an older
+  1.29. This also moves the floor for installs and upgrades, because `probe()` serves all
+  calls. Step 2 updates `version_parsing_and_floor` in `winget_parse.rs` and
+  `version_probe_enforces_floor` in `tests/executor_winget.rs` (lines 526 to 535, which
+  assert "1.6"). `probe()` then returns `unsupported` ("winget 1.29 or newer is necessary") for an older
   winget. The catalog source calls `probe()` once, when it connects. Reason: winget 1.29
   prints full columns to a pipe. Older versions are not tested and can cut cells.
 - **Non-English Windows.** The column parser does not read header words. The `show` key table
-  does. On a non-English Windows the search works if winget keeps the column layout, and the
+  does. On a non-English Windows, whether the search works is **unverified**. A translated
+  header word that holds a space adds a fake column start, so the position map shifts. The
   detail shows only name, id and version. Nobody has a non-English recording today. The README
   states the limit: "Search and app details are tested on English Windows only." A recording
   from another language becomes a new fixture.
@@ -252,19 +293,23 @@ All tests run unattended, with no network and no real winget (SPEC §8, F2).
 
 | Test | Where | What it checks |
 |---|---|---|
-| Column parser | `winget_parse.rs` unit tests | Recorded `winget search` output: with and without the Match column, a name with spaces, a cut-list footer line, CJK row skipped, no separator gives `None`. |
+| Column parser | `winget_parse.rs` unit tests | Recorded `winget search` output: with and without the Match column, a name with spaces, the cut-list footer (a line that starts with `<`), an id with no `.` skipped, CJK row skipped, no separator gives `None`. |
+| Merge | `catalog/search.rs` unit tests | Two winget rows, same name, empty publisher, different ids: both stay. Same name and non-empty publisher in two sources: one stays. |
+| Upsert | `db` tests | A search row with empty publisher and description does not overwrite stored values (`UPSERT_SUMMARY`). |
 | Show parser | `winget_parse.rs` unit tests | Recorded `winget show VideoLAN.VLC` output: fields, tags, installer block, a multi-line description, an unknown key, a missing title gives `None`. |
 | Argument lists | `winget_cli.rs` unit tests | Search and show args contain `--source winget` and `--disable-interactivity`, pass `guard_args()`, and hold no agreement flag. A query `-x` stays after `--query`. |
 | F1: "vlc" | `tests/catalog_winget_cli.rs` | Fake winget prints the recorded "vlc" table. `Catalog::search("vlc")` has `VideoLAN.VLC` in the first 3. |
 | F1: no match | same file | Fake winget prints "No package found matching input criteria." and exits `0x8A150014`. The result is an empty list. |
 | Agreement | same file | Fake winget exits `0x8A150046`. Search returns `agreements_required`; the argv file shows no agreement flag. |
 | Time limit | same file | Fake winget sleeps past a short test limit. Detail returns `source_unavailable`. The limit is a field, so the test does not wait 60 s. |
-| Detail cache | same file | Two `get_detail()` calls start one process (count lines in the argv file). |
+| Detail cache | same file | Two `get_detail()` calls start one `show` process. The test counts the lines of the argv file and excludes the `--version` call of `probe()`. |
+| Cached detail on install | same file | `Catalog::cached_detail_any_age()` returns an expired detail and starts no process. |
 | Old version | same file | `FAKE_WINGET_VERSION=v1.28.240` gives `unsupported`. |
 | Migration | `db` tests | Migrations apply from an empty DB; 0004 removes community rows and keeps other rows. |
 
 Fixtures go in `src-tauri/tests/fixtures/winget/1.29/` as plain text files:
-`search-vlc.txt`, `search-none.txt`, `show-vlc.txt`. One folder per winget version that the
+`search-vlc.txt`, `search-none.txt`, `search-same-name.txt` (two packages with the same
+name and different ids, and a cut-list footer), `show-vlc.txt`. One folder per winget version that the
 project supports. The fake winget gets a new directive, `file PATH`, which prints a file as it
 is. The fixtures are recorded once from winget 1.29.380 on English Windows. Each file starts
 with no header of our own, so it stays an exact copy of winget's output.
@@ -334,14 +379,16 @@ in `src-tauri/`. The table gives the test command of the step.
 
 | Step | Pull request | Test command (in `src-tauri/`) |
 |---|---|---|
-| 1 | **Parsers.** `parse_columns()` and `parse_show()` in `winget_parse.rs`. Record the three fixtures from winget 1.29.380. Unit tests only. | `cargo test --lib executor::winget_parse` |
-| 2 | **Read-only calls.** `WingetCli::search_catalog()` and `show_package()`, the argument lists, the time limits as fields, the exit-code table, `MIN_VERSION` = 1.29. Add the `file` directive to the fake winget. | `cargo test --test executor_winget` |
-| 3 | **Catalog source.** `sources/winget_cli.rs` (`WingetCliSource`, lazy connect). `tests/catalog_winget_cli.rs` with the F1 tests, the agreement test, the time-limit test and the cache test. Not wired yet. | `cargo test --test catalog_winget_cli` |
-| 4 | **Switch.** Wire `WingetCliSource` in `enabled_sources()`. Unwire `WingetRepoSource` and add its module comment. Migration 0004. `start_install` uses the cached detail. SPEC and backlog edits. | `cargo test` |
+| 1 | **Parsers.** `parse_columns()` and `parse_show()` in `winget_parse.rs`. Record the four fixtures from winget 1.29.380. Unit tests only. | `cargo test --lib executor::winget_parse` |
+| 2 | **Read-only calls.** `WingetCli::search_catalog()` and `show_package()`, the argument lists, the time limits as fields, the exit-code table, the time-limit message in `run_capture_timeout()`, `MIN_VERSION` = 1.29 with the updated floor tests (`version_parsing_and_floor`, `version_probe_enforces_floor`). Add the `file` directive to the fake winget. | `cargo test` |
+| 3 | **Catalog source.** `sources/winget_cli.rs` (`WingetCliSource`, lazy connect). `tests/catalog_winget_cli.rs` with the F1 tests, the agreement test, the time-limit test and the cache test. The merge change in `catalog/search.rs` (section 3) and its tests. Not wired yet. | `cargo test` |
+| 4 | **Switch.** Wire `WingetCliSource` in `enabled_sources()`. Unwire `WingetRepoSource` and add its module comment. Migration 0004. `UPSERT_SUMMARY` keeps a stored publisher and description. `Catalog::cached_detail_any_age()` and its use in `start_install` (`services/install.rs`). SPEC §0 hard rule 2 and backlog edits. **Owner gate:** the owner confirms the change of SPEC §0 hard rule 2 before this step merges. | `cargo test` |
 | 5 | **UI.** Detail loading state and its text. The card hides an empty publisher. The error text for `agreements_required` on a read-only call. README limit. | `cd ../ui && npm run check && npm run build` |
-| 6 | **Real-winget check.** `tests/winget_catalog_smoke.rs`, `#[ignore]`, read-only. It runs search "vlc", a no-match search and a first `show`, with no agreement flag, and prints the times. A CI job runs it with `--ignored` on `windows-latest`; it does not gate a merge. Record the times and the agreement result in ADR 0001. | `cargo test --test winget_catalog_smoke -- --ignored` (CI only) |
+| 6 | **Real-winget check.** `tests/winget_catalog_smoke.rs`, `#[ignore]`, read-only. It runs search "vlc", a no-match search and a first `show`, with no agreement flag, and prints the times. A CI job runs it with `--ignored` on `windows-latest`; it is a manual gate before step 4 (see below), not a CI gate. Record the times and the agreement result in ADR 0001. | `cargo test --test winget_catalog_smoke -- --ignored` (CI only) |
 | 7 | **Recorded version** (SPEC §6.7 gap row). After a successful install, read the version from `winget list` and keep the target as the fallback. Optional for #20; it can move to WP6. | `cargo test --test install_loop` |
 
-Steps 1 to 3 add code with no change in behavior. Step 4 closes F1 (#20) and #16. Step 6 must
-pass before step 4 merges, because it checks ADR 0001 conditions 2 and 3 and the agreement
+Steps 1 and 3 add code that nothing calls. Step 2 changes behavior: the winget floor moves
+from 1.6 to 1.29, and this affects installs. Step 4 closes F1 (#20) and #16. Step 6 is a
+manual gate before step 4: a person runs the check and reads its result. It is not a CI gate.
+It must pass before step 4 merges, because it checks ADR 0001 conditions 2 and 3 and the agreement
 point of section 6. If step 6 cannot run before step 4, the owner decides the merge.
