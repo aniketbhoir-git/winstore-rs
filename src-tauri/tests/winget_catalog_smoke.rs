@@ -40,26 +40,30 @@ fn artifact_dir() -> PathBuf {
 }
 
 /// Runs the read-only winget command with stdout and stderr piped (a pipe, not a console)
-/// and saves the raw output as text. Returns the stdout text.
+/// and saves the raw bytes. Returns the stdout text.
 fn record(dir: &Path, winget: &Path, name: &str, args: &[&str]) -> String {
     let out = Command::new(winget)
         .args(args)
         .output()
         .expect("start winget");
-    let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
-    let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
     let exit = out
         .status
         .code()
         .map_or("none".to_string(), |c| c.to_string());
-    std::fs::write(dir.join(format!("{name}.stdout.txt")), &stdout).unwrap();
+    std::fs::write(dir.join(format!("{name}.stdout.txt")), &out.stdout).unwrap();
+    std::fs::write(dir.join(format!("{name}.stderr.txt")), &out.stderr).unwrap();
     std::fs::write(
         dir.join(format!("{name}.meta.txt")),
-        format!("args: {args:?}\nexit: {exit}\nstderr:\n{stderr}\n"),
+        format!(
+            "args: {args:?}
+exit: {exit}
+"
+        ),
     )
     .unwrap();
-    println!("recorded {name}: exit {exit}, {} bytes", stdout.len());
-    stdout
+    println!("recorded {name}: exit {exit}, {} bytes", out.stdout.len());
+    // Lossy only for the in-memory column check; the saved files are the raw bytes.
+    String::from_utf8_lossy(&out.stdout).into_owned()
 }
 
 /// Notes whether columns look cut when stdout is a pipe: winget ends a cut cell with U+2026.
@@ -104,7 +108,29 @@ async fn real_winget_catalog_search_and_show() {
     let version = cli.probe().await.expect("winget --version");
     println!("winget at {} ({version})", cli.path().display());
 
-    // Raw output first, so it is saved even if an assertion below fails.
+    // The cold `show` must be the first `show` of the whole job (ADR 0001, condition 2):
+    // nothing below runs before it, and the workflow runs no `show` before this test.
+    let t1 = Instant::now();
+    let first = fail_on_agreement(cli.show_package("VideoLAN.VLC").await);
+    let cold = t1.elapsed();
+    let t2 = Instant::now();
+    let second = fail_on_agreement(cli.show_package("VideoLAN.VLC").await);
+    let warm = t2.elapsed();
+    println!("show VideoLAN.VLC cold: {cold:?}");
+    println!("show VideoLAN.VLC warm: {warm:?}");
+    std::fs::write(
+        dir.join("show-timing.txt"),
+        format!(
+            "cold (first show of the job): {cold:?}
+warm (second show): {warm:?}
+"
+        ),
+    )
+    .unwrap();
+    assert_eq!(first.id, "VideoLAN.VLC");
+    assert_eq!(second.id, "VideoLAN.VLC");
+
+    // Raw output next, so it is saved even if an assertion below fails.
     let ver = Command::new(cli.path()).arg("--version").output().unwrap();
     std::fs::write(dir.join("winget-version.txt"), &ver.stdout).unwrap();
     let common = ["--source", "winget", "--disable-interactivity"];
@@ -130,22 +156,6 @@ async fn real_winget_catalog_search_and_show() {
 
     let none = fail_on_agreement(cli.search_catalog("zzzqqqxxnotapackage", 10).await);
     assert!(none.is_empty(), "nonsense query returned {none:?}");
-
-    let t1 = Instant::now();
-    let first = fail_on_agreement(cli.show_package("VideoLAN.VLC").await);
-    let first_t = t1.elapsed();
-    let t2 = Instant::now();
-    let second = fail_on_agreement(cli.show_package("VideoLAN.VLC").await);
-    let second_t = t2.elapsed();
-    println!("show VideoLAN.VLC first:  {first_t:?}");
-    println!("show VideoLAN.VLC second: {second_t:?}");
-    std::fs::write(
-        dir.join("show-timing.txt"),
-        format!("first: {first_t:?}\nsecond: {second_t:?}\n"),
-    )
-    .unwrap();
-    assert_eq!(first.id, "VideoLAN.VLC");
-    assert_eq!(second.id, "VideoLAN.VLC");
 }
 
 #[cfg(test)]

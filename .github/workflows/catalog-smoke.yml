@@ -11,7 +11,7 @@ permissions:
 jobs:
   catalog-smoke:
     runs-on: windows-latest
-    timeout-minutes: 20
+    timeout-minutes: 45
     env:
       STORE_CATALOG_ARTIFACTS: ${{ github.workspace }}\catalog-smoke-artifacts
     steps:
@@ -38,19 +38,6 @@ jobs:
           }
           winget --version
           if ($LASTEXITCODE -ne 0) { Write-Error 'winget absent'; exit 1 }
-
-      - name: Record raw winget output
-        shell: pwsh
-        run: |
-          New-Item -ItemType Directory -Force $env:STORE_CATALOG_ARTIFACTS | Out-Null
-          $dir = $env:STORE_CATALOG_ARTIFACTS
-          winget --version | Out-File "$dir\winget-version-step.txt"
-          $c = '--source','winget','--disable-interactivity'
-          # Piped to Out-File: stdout is a pipe. Shows whether columns are cut.
-          winget search --query vlc @c | Out-File -Encoding utf8 "$dir\step-search-vlc.pipe.txt"
-          winget search --query zzzqqqxxnotapackage @c | Out-File -Encoding utf8 "$dir\step-search-nonsense.pipe.txt"
-          winget show --id VideoLAN.VLC --exact @c | Out-File -Encoding utf8 "$dir\step-show-vlc.pipe.txt"
-        continue-on-error: true
 
       - name: Real-winget catalog smoke
         shell: pwsh

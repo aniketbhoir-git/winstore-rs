@@ -1,5 +1,5 @@
-//! Guard against real winget in tests: no test file except `winget_smoke.rs` may call
-//! the real-winget constructor. Others use `connect_at` with the subprocess fake.
+//! Guard against real winget in tests: no test file except `winget_smoke.rs` and
+//! `winget_catalog_smoke.rs` may call the real-winget constructor. Others use `connect_at` with the subprocess fake.
 
 use std::path::{Path, PathBuf};
 
