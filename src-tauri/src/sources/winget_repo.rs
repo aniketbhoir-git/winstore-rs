@@ -379,6 +379,7 @@ impl ApiPackage {
             screenshots: Vec::new(),
             website: rest.homepage,
             license: rest.license,
+            license_url: None,
             release_notes: None,
             installer: InstallerMetadata {
                 architecture: None,

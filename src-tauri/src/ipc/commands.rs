@@ -19,6 +19,7 @@ use crate::domain::{
 };
 use crate::error::{AppError, AppResult};
 use crate::executor::{InstallRequest, InstallScope};
+use crate::services::consent::Consent;
 pub use crate::services::install::OperationStarted;
 use crate::services::install::{self, InstallStatus};
 
@@ -33,9 +34,25 @@ pub struct InstallOptions {
     pub version: Option<String>,
     /// `"user"` or `"machine"`.
     pub scope: Option<String>,
+    /// The agreements that the user accepted in the consent dialog (SPEC §6.6). It is checked
+    /// by the service, never passed on as it is.
+    pub consent: Option<Consent>,
+}
+
+/// The `options` argument of `start_uninstall`: a consent of the kind `"source"` only.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct UninstallOptions {
+    pub consent: Option<Consent>,
 }
 
 impl InstallOptions {
+    /// The request for the executor (it carries no consent) and the consent for the check.
+    pub(crate) fn into_parts(self) -> AppResult<(InstallRequest, Option<Consent>)> {
+        let consent = self.consent.clone();
+        Ok((self.into_request()?, consent))
+    }
+
     pub(crate) fn into_request(self) -> AppResult<InstallRequest> {
         let scope = match self.scope.as_deref() {
             None | Some("") => None,
@@ -50,7 +67,11 @@ impl InstallOptions {
                 Some(v.to_string())
             }
         };
-        Ok(InstallRequest { version, scope })
+        Ok(InstallRequest {
+            version,
+            scope,
+            consent: None,
+        })
     }
 }
 
@@ -129,7 +150,8 @@ pub async fn run_start_install(
 ) -> AppResult<OperationStarted> {
     let core = state.core().await?;
     let id = parse_id(package_id)?;
-    install::start_install(&core, sink, id, options.into_request()?).await
+    let (request, consent) = options.into_parts()?;
+    install::start_install_with_consent(&core, sink, id, request, consent.as_ref()).await
 }
 
 /// Uninstalls a package recorded as installed by this app.
@@ -137,9 +159,33 @@ pub async fn run_start_uninstall(
     state: &AppState,
     sink: SharedSink,
     package_id: &str,
+    options: UninstallOptions,
 ) -> AppResult<OperationStarted> {
     let core = state.core().await?;
-    install::start_uninstall(&core, sink, parse_id(package_id)?).await
+    install::start_uninstall_with_consent(
+        &core,
+        sink,
+        parse_id(package_id)?,
+        options.consent.as_ref(),
+    )
+    .await
+}
+
+/// Opens a link of the consent dialog in the system browser. Only a link that winget printed
+/// for this package in a live agreement challenge opens (SPEC §6.6 trust boundary).
+pub async fn run_open_agreement_link(
+    state: &AppState,
+    package_id: &str,
+    url: &str,
+) -> AppResult<()> {
+    let core = state.core().await?;
+    let id = parse_id(package_id)?;
+    if !core.consent.link_allowed(&id, url) {
+        return Err(AppError::InvalidConfig(
+            "this link does not belong to an agreement of this package".into(),
+        ));
+    }
+    open_in_browser(url)
 }
 
 pub async fn run_cancel(state: &AppState, operation_id: &str) -> AppResult<()> {
@@ -334,8 +380,18 @@ pub async fn start_uninstall(
     app: AppHandle,
     state: State<'_, AppState>,
     package_id: String,
+    options: Option<UninstallOptions>,
 ) -> Result<OperationStarted, AppError> {
-    run_start_uninstall(&state, sink(&app), &package_id).await
+    run_start_uninstall(&state, sink(&app), &package_id, options.unwrap_or_default()).await
+}
+
+#[tauri::command]
+pub async fn open_agreement_link(
+    state: State<'_, AppState>,
+    package_id: String,
+    url: String,
+) -> Result<(), AppError> {
+    run_open_agreement_link(&state, &package_id, &url).await
 }
 
 #[tauri::command]

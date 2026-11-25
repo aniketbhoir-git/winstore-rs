@@ -23,13 +23,15 @@ use std::sync::{Arc, Mutex, MutexGuard};
 
 use serde::Serialize;
 
+use super::consent::Consent;
 use crate::db::repo::{installs, operation_log};
 use crate::db::DbPool;
 use crate::domain::{
     now_unix, InstallRecord, InstallState, LogLevel, Operation, OperationLogEntry, PackageId,
 };
-use crate::error::{AppError, AppResult};
-use crate::executor::{InstallRequest, OperationHandle};
+use crate::error::{AgreementEntry, AppError, AppResult};
+use crate::executor::winget_cli::winget_target;
+use crate::executor::{InstallRequest, OperationHandle, RemoveRequest};
 use crate::ipc::events::{
     self, emit, error_json, OperationFinishedEvent, SharedSink, EVENT_OPERATION_FINISHED,
 };
@@ -106,6 +108,19 @@ pub async fn start_install(
     id: PackageId,
     request: InstallRequest,
 ) -> AppResult<OperationStarted> {
+    start_install_with_consent(core, sink, id, request, None).await
+}
+
+/// `start_install` with the `options.consent` of the UI (SPEC §6.6). The consent is checked
+/// against the open challenges of this package, version and winget source; whatever
+/// `request.consent` held on entry is replaced by the result of that check.
+pub async fn start_install_with_consent(
+    core: &Arc<Core>,
+    sink: SharedSink,
+    id: PackageId,
+    mut request: InstallRequest,
+    consent: Option<&Consent>,
+) -> AppResult<OperationStarted> {
     let detail = core.catalog.get_detail(&id).await?;
     if detail.summary.is_paid {
         return Err(AppError::Unsupported(
@@ -113,6 +128,13 @@ pub async fn start_install(
         ));
     }
     check_ledger(core, &id, Operation::Install).await?;
+    request.consent = core.consent.verify(
+        &id,
+        Operation::Install,
+        request.version.as_deref(),
+        winget_target(&id)?.1,
+        consent,
+    )?;
     let target = request
         .version
         .clone()
@@ -139,9 +161,28 @@ pub async fn start_uninstall(
     sink: SharedSink,
     id: PackageId,
 ) -> AppResult<OperationStarted> {
+    start_uninstall_with_consent(core, sink, id, None).await
+}
+
+/// `start_uninstall` with a consent of the kind `"source"` only (spike question 3).
+pub async fn start_uninstall_with_consent(
+    core: &Arc<Core>,
+    sink: SharedSink,
+    id: PackageId,
+    consent: Option<&Consent>,
+) -> AppResult<OperationStarted> {
     check_ledger(core, &id, Operation::Remove).await?;
+    let request = RemoveRequest {
+        consent: core.consent.verify(
+            &id,
+            Operation::Remove,
+            None,
+            winget_target(&id)?.1,
+            consent,
+        )?,
+    };
     let executor = core.executor().await?;
-    let handle = executor.remove(&id).await?;
+    let handle = executor.remove(&id, &request).await?;
     launch(core, sink, &executor, handle, id, Operation::Remove, None).await
 }
 
@@ -337,10 +378,46 @@ pub(crate) async fn drive(
         )),
     };
     // SPEC §1.3 `version`: when the request gave winget no version, the target stands in.
-    if let Err(AppError::AgreementsRequired { version, .. }) = &mut result {
-        if version.is_none() {
-            version.clone_from(&target);
+    match &mut result {
+        Err(AppError::AgreementsRequired {
+            source_agreements,
+            version,
+            winget_source,
+            agreement_url,
+            agreements,
+            consent_token,
+            ..
+        }) => {
+            if version.is_none() {
+                version.clone_from(&target);
+            }
+            // An update takes no consent (SPEC §6.6), so it gets no token.
+            if op != Operation::Update {
+                // A package agreement with no link of its own falls back to the license link
+                // of the cached detail (SPEC §1.3).
+                if agreement_url.is_none() && !*source_agreements {
+                    let license = core.catalog.get_detail(id).await.ok();
+                    if let Some(url) = license.and_then(|d| d.license_url) {
+                        agreements.push(AgreementEntry {
+                            label: "License".into(),
+                            text: None,
+                            url: Some(url.clone()),
+                        });
+                        *agreement_url = Some(url);
+                    }
+                }
+                let urls = agreements.iter().filter_map(|a| a.url.clone()).collect();
+                *consent_token = Some(core.consent.issue(
+                    id,
+                    *source_agreements,
+                    version.clone(),
+                    winget_source.as_deref().unwrap_or_default(),
+                    urls,
+                ));
+            }
         }
+        // Any other end closes the attempt: no consent outlives it.
+        _ => core.consent.clear(id),
     }
     let target = if result.is_ok() && op != Operation::Remove {
         installed_version_or(core, id, op, target).await

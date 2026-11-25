@@ -105,6 +105,9 @@ pub struct PackageDetail {
     pub screenshots: Vec<String>,
     pub website: Option<String>,
     pub license: Option<String>,
+    /// Link to the license terms; https only. It only feeds `agreement_url` (SPEC §6.6).
+    #[serde(default)]
+    pub license_url: Option<String>,
     pub release_notes: Option<String>,
     pub installer: InstallerMetadata,
     pub versions: BTreeMap<String, PackageVersion>,
@@ -159,6 +162,7 @@ pub(crate) mod fixtures {
             ],
             website: Some("https://example.org".into()),
             license: Some("MIT".into()),
+            license_url: None,
             release_notes: None,
             installer: InstallerMetadata {
                 architecture: Some("x64".into()),

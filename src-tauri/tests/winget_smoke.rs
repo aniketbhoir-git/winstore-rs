@@ -10,7 +10,7 @@
 
 use store_lib::domain::{PackageId, SourceKind};
 use store_lib::executor::winget_cli::{WingetCli, WingetOptions};
-use store_lib::executor::{InstallRequest, OperationHandle, PackageExecutor};
+use store_lib::executor::{InstallRequest, OperationHandle, PackageExecutor, RemoveRequest};
 
 /// Message of a refused run. It names no variable.
 const REFUSAL: &str = "This test installs software. It runs only on a GitHub-hosted runner.";
@@ -64,7 +64,11 @@ async fn install_then_remove_one_small_package() {
     )
     .await;
     println!("install outcome: {installed:?}");
-    let removed = run("remove", cli.remove(&id).await.unwrap()).await;
+    let removed = run(
+        "remove",
+        cli.remove(&id, &RemoveRequest::default()).await.unwrap(),
+    )
+    .await;
     println!("remove outcome: {removed:?}");
 
     if !matches!(

@@ -45,11 +45,46 @@ impl InstallScope {
     }
 }
 
-/// Options for `install`. `Default` means "latest version, winget's default scope".
+/// The agreement kinds that the user accepted for ONE operation, already checked against the
+/// challenge that winget raised (`services::consent`, SPEC §6.6). Only that check should
+/// build one. It is the one value that lets an agreement flag reach winget (see
+/// `winget_cli::guard_args_consented`); no config, setting or stored value can make one.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct VerifiedConsent {
+    source: bool,
+    package: bool,
+}
+
+impl VerifiedConsent {
+    pub fn new(source: bool, package: bool) -> Self {
+        VerifiedConsent { source, package }
+    }
+    pub fn source(&self) -> bool {
+        self.source
+    }
+    pub fn package(&self) -> bool {
+        self.package
+    }
+    pub fn is_empty(&self) -> bool {
+        !self.source && !self.package
+    }
+}
+
+/// Options for `install`. `Default` means "latest version, winget's default scope, no
+/// agreement flag".
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct InstallRequest {
     pub version: Option<String>,
     pub scope: Option<InstallScope>,
+    /// Set only by `services/install.rs` after the consent check; never by the IPC layer.
+    pub consent: Option<VerifiedConsent>,
+}
+
+/// Options for `remove`. `winget uninstall` accepts the source agreement flag only (spike
+/// question 3), so `consent.package()` is never passed.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct RemoveRequest {
+    pub consent: Option<VerifiedConsent>,
 }
 
 /// One row of `winget list`. `source` is `None` for apps winget cannot match to a catalog
@@ -70,7 +105,11 @@ pub trait PackageExecutor: Send + Sync {
         request: &'a InstallRequest,
     ) -> ExecFuture<'a, OperationHandle>;
     fn cancel<'a>(&'a self, operation_id: &'a str) -> ExecFuture<'a, ()>;
-    fn remove<'a>(&'a self, package: &'a PackageId) -> ExecFuture<'a, OperationHandle>;
+    fn remove<'a>(
+        &'a self,
+        package: &'a PackageId,
+        request: &'a RemoveRequest,
+    ) -> ExecFuture<'a, OperationHandle>;
     fn list_installed<'a>(&'a self) -> ExecFuture<'a, Vec<InstalledPackage>>;
     fn list_updates<'a>(&'a self) -> ExecFuture<'a, Vec<UpdateAvailable>>;
     fn update<'a>(&'a self, package: &'a PackageId) -> ExecFuture<'a, OperationHandle>;

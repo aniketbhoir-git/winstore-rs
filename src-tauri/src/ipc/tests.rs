@@ -362,6 +362,7 @@ fn install_options_parse_scope_and_version() {
     let r = InstallOptions {
         version: Some(" ".into()),
         scope: Some("machine".into()),
+        consent: None,
     }
     .into_request()
     .unwrap();
@@ -370,6 +371,7 @@ fn install_options_parse_scope_and_version() {
     let e = InstallOptions {
         version: None,
         scope: Some("root".into()),
+        consent: None,
     }
     .into_request()
     .unwrap_err();
@@ -439,6 +441,12 @@ fn fixture_error_agreements_required() {
         version: Some("1.2.3".into()),
         agreement_text: None,
         agreement_url: Some("https://example.org/terms".into()),
+        agreements: vec![crate::error::AgreementEntry {
+            label: "Terms of use".into(),
+            text: None,
+            url: Some("https://example.org/terms".into()),
+        }],
+        consent_token: Some("tok-0123456789abcdef".into()),
     };
     check_fixture(
         "error_agreements_required.json",
@@ -495,6 +503,7 @@ fn version_strings_are_validated() {
     let opts = |v: &str| InstallOptions {
         version: Some(v.into()),
         scope: None,
+        consent: None,
     };
     for ok in ["1.2.3", "2024.1_beta+build-5", "v1"] {
         assert_eq!(
@@ -521,5 +530,39 @@ fn version_strings_are_validated() {
             "invalid_config",
             "{bad}"
         );
+    }
+}
+
+// ---- Consent option and agreement link (SPEC §6.6 case (b)) ----
+
+#[test]
+fn consent_option_parses_from_the_json_the_ui_sends() {
+    let o: InstallOptions = serde_json::from_value(serde_json::json!({
+        "version": "1.2.3",
+        "consent": { "kinds": ["source", "package"], "tokens": ["a", "b"] }
+    }))
+    .unwrap();
+    let (req, consent) = o.into_parts().unwrap();
+    // The request for the executor never carries the UI's consent.
+    assert_eq!(req.consent, None);
+    let c = consent.unwrap();
+    assert_eq!(c.kinds, ["source", "package"]);
+    assert_eq!(c.tokens, ["a", "b"]);
+    // No consent key, an empty object: no consent.
+    let o: InstallOptions = serde_json::from_value(serde_json::json!({})).unwrap();
+    assert!(o.into_parts().unwrap().1.is_none());
+}
+
+#[tokio::test]
+async fn a_link_that_no_challenge_showed_does_not_open() {
+    let (state, _) = state_with(false, false, exec_factory(FakeExec::default())).await;
+    for url in [
+        "https://evil.example/",
+        "file:///c:/windows/system32/calc.exe",
+    ] {
+        let err = run_open_agreement_link(&state, "winget/Foo.Bar", url)
+            .await
+            .unwrap_err();
+        assert_eq!(err.code(), "invalid_config");
     }
 }

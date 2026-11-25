@@ -7,7 +7,7 @@ use std::collections::VecDeque;
 use std::fmt;
 
 use crate::domain::OperationStage;
-use crate::error::AppError;
+use crate::error::{AgreementEntry, AppError};
 
 /// Oldest winget this project supports (SPEC 2; 1.29 prints full columns to a pipe).
 pub const MIN_VERSION: WingetVersion = WingetVersion {
@@ -129,6 +129,66 @@ fn stage_rank(s: OperationStage) -> u8 {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AgreementBlock {
+    None,
+    /// `listing` is true after the `Agreements:` line.
+    Package {
+        listing: bool,
+    },
+    Source,
+}
+
+const AGREEMENT_MAX_ENTRIES: usize = 16;
+const AGREEMENT_MAX_TEXT: usize = 4000;
+const AGREEMENT_MAX_LABEL: usize = 200;
+const URL_MAX_LEN: usize = 2048;
+
+/// A link the app may show and open: `https://`, a host, no space, control or markup
+/// character, at most 2048 bytes. Anything else is not a link (SPEC §6.6 trust boundary).
+pub fn safe_https_url(s: &str) -> Option<String> {
+    let rest = s.strip_prefix("https://")?;
+    let host_ok = rest
+        .chars()
+        .next()
+        .is_some_and(|c| c.is_ascii_alphanumeric());
+    let clean = s.chars().all(|c| {
+        c.is_ascii_graphic() && !matches!(c, '"' | '<' | '>' | '\\' | '`' | '{' | '}' | '|' | '^')
+    });
+    (host_ok && clean && s.len() <= URL_MAX_LEN).then(|| s.to_string())
+}
+
+/// Parses one `Label: text or link` line of an agreement block. A final token that is a safe
+/// https link becomes `url`; the rest is `text`. A line with neither is no agreement.
+pub fn parse_agreement_entry(line: &str) -> Option<AgreementEntry> {
+    let line = line.trim();
+    let (label, rest) = match line.split_once(": ") {
+        Some((l, r)) => (l.trim(), r.trim()),
+        None => (line.strip_suffix(':')?.trim(), ""),
+    };
+    if label.is_empty() || label.len() > AGREEMENT_MAX_LABEL || label.contains("://") {
+        return None;
+    }
+    let (text, url) = match rest.rsplit_once(char::is_whitespace) {
+        Some((before, last)) if safe_https_url(last).is_some() => {
+            (before.trim(), safe_https_url(last))
+        }
+        _ => match safe_https_url(rest) {
+            Some(u) => ("", Some(u)),
+            None => (rest, None),
+        },
+    };
+    let text: String = text.chars().take(AGREEMENT_MAX_TEXT).collect();
+    if text.is_empty() && url.is_none() {
+        return None;
+    }
+    Some(AgreementEntry {
+        label: label.to_string(),
+        text: (!text.is_empty()).then_some(text),
+        url,
+    })
+}
+
 /// Line-oriented, tolerant progress parser. Fraction and stage never move backwards; unknown
 /// lines go to the log tail. The exit code (not this parser) decides success.
 #[derive(Debug)]
@@ -138,6 +198,8 @@ pub struct ProgressParser {
     bar_seen: bool,
     installer_exit_code: Option<i32>,
     agreements_shown: bool,
+    block: AgreementBlock,
+    agreements: Vec<AgreementEntry>,
     tail: VecDeque<String>,
 }
 
@@ -155,6 +217,8 @@ impl ProgressParser {
             bar_seen: false,
             installer_exit_code: None,
             agreements_shown: false,
+            block: AgreementBlock::None,
+            agreements: Vec::new(),
             tail: VecDeque::new(),
         }
     }
@@ -173,9 +237,17 @@ impl ProgressParser {
         self.installer_exit_code
     }
 
-    /// True once winget printed license / agreement text.
+    /// True once winget printed an agreement block (spike E7): the package header
+    /// `Agreements for <name> [<id>] Version <v>` or the source header. The notice that winget
+    /// prints for every install ("This application is licensed to you by its owner.") does not
+    /// count.
     pub fn agreements_shown(&self) -> bool {
         self.agreements_shown
+    }
+
+    /// The agreements of the block winget printed (label, text, https link).
+    pub fn agreements(&self) -> &[AgreementEntry] {
+        &self.agreements
     }
 
     pub fn tail_text(&self) -> String {
@@ -191,6 +263,10 @@ impl ProgressParser {
         if line.is_empty() {
             return None;
         }
+        if self.agreement_line(line, raw.starts_with([' ', '\t'])) {
+            self.push_tail(line);
+            return None;
+        }
         match self.classify(line) {
             Some((stage, fraction)) => self.advance(stage, fraction, line),
             None => {
@@ -200,16 +276,74 @@ impl ProgressParser {
         }
     }
 
+    /// Reads the agreement block of an install that stops for an agreement. Returns true for a
+    /// line that belongs to the block (header, entry or footer).
+    fn agreement_line(&mut self, line: &str, indented: bool) -> bool {
+        if line.starts_with("Agreements for ") && line.contains('[') {
+            self.block = AgreementBlock::Package { listing: false };
+            self.agreements_shown = true;
+            self.agreements.clear();
+            return true;
+        }
+        if line.starts_with("The `")
+            && line.contains("source requires that you view the following agreements")
+        {
+            self.block = AgreementBlock::Source;
+            self.agreements_shown = true;
+            self.agreements.clear();
+            return true;
+        }
+        match self.block {
+            AgreementBlock::None => false,
+            AgreementBlock::Package { listing } => {
+                if line == "Agreements:" {
+                    self.block = AgreementBlock::Package { listing: true };
+                    return true;
+                }
+                if !listing {
+                    return false;
+                }
+                if !indented {
+                    self.block = AgreementBlock::None;
+                    return false;
+                }
+                self.add_entry(line, true);
+                true
+            }
+            AgreementBlock::Source => {
+                if line.starts_with("One or more of the source agreements") {
+                    self.block = AgreementBlock::None;
+                    return true;
+                }
+                self.add_entry(line, false);
+                true
+            }
+        }
+    }
+
+    /// `Label: text or link`; an indented line with no label continues the last text.
+    fn add_entry(&mut self, line: &str, may_continue: bool) {
+        if let Some(entry) = parse_agreement_entry(line) {
+            if self.agreements.len() < AGREEMENT_MAX_ENTRIES {
+                self.agreements.push(entry);
+            }
+        } else if may_continue && !line.ends_with(':') {
+            if let Some(last) = self.agreements.last_mut() {
+                let text = last.text.get_or_insert_with(String::new);
+                if text.len() < AGREEMENT_MAX_TEXT {
+                    if !text.is_empty() {
+                        text.push('\n');
+                    }
+                    text.push_str(line);
+                }
+            }
+        }
+    }
+
     fn classify(&mut self, line: &str) -> Option<(OperationStage, f32)> {
         use OperationStage::*;
         if line.starts_with("Found ") && line.contains('[') && line.contains(']') {
             return Some((Resolving, 0.05));
-        }
-        if line.contains("This application is licensed to you by its owner")
-            || line.contains("Microsoft is not responsible for, nor does it grant any licenses")
-        {
-            self.agreements_shown = true;
-            return None;
         }
         if line.starts_with("Downloading ") {
             return Some((Downloading, 0.10));
@@ -378,6 +512,8 @@ pub fn map_exit(
             version: None,
             agreement_text: None,
             agreement_url: None,
+            agreements: Vec::new(),
+            consent_token: None,
         },
         EXIT_SOURCE_AGREEMENTS => AppError::AgreementsRequired {
             source_agreements: true,
@@ -386,6 +522,8 @@ pub fn map_exit(
             version: None,
             agreement_text: None,
             agreement_url: None,
+            agreements: Vec::new(),
+            consent_token: None,
         },
         EXIT_CTRL_SIGNAL | EXIT_APPTERMINATION | EXIT_CANCELLED_BY_USER => AppError::Cancelled,
         _ => {
@@ -524,6 +662,8 @@ pub struct ShowBlock {
     pub description: Option<String>,
     pub homepage: Option<String>,
     pub license: Option<String>,
+    /// `License Url:` of `winget show`, kept only when it is a safe https link.
+    pub license_url: Option<String>,
     pub release_notes: Option<String>,
     pub tags: Vec<String>,
     pub installer_type: Option<String>,
@@ -541,6 +681,7 @@ impl ShowBlock {
             "Description" => self.description = v,
             "Homepage" => self.homepage = v,
             "License" => self.license = v,
+            "License Url" => self.license_url = v.as_deref().and_then(safe_https_url),
             "Release Notes" => self.release_notes = v,
             "Installer Type" => self.installer_type = v,
             "Installer Url" => self.installer_url = v,
@@ -888,13 +1029,104 @@ mod tests {
         assert_eq!(ups[2].stage, OperationStage::Finalizing);
     }
 
+    fn feed_text(p: &mut ProgressParser, text: &str) {
+        for l in text.lines() {
+            p.feed_line(l);
+        }
+    }
+
+    /// Spike E7: the notice that winget prints for every install is not an agreement.
     #[test]
-    fn agreement_text_sets_flag_without_stage_change() {
+    fn the_install_notice_is_not_an_agreement() {
         let mut p = ProgressParser::new();
-        assert!(p
-            .feed_line("This application is licensed to you by its owner.")
-            .is_none());
+        let fixture = include_str!("../../tests/fixtures/winget/1.29/install-piped.txt");
+        feed_text(&mut p, fixture);
+        assert!(!p.agreements_shown());
+        assert!(p.agreements().is_empty());
+        p.feed_line("This application is licensed to you by its owner.");
+        p.feed_line("Microsoft is not responsible for, nor does it grant any licenses to, third-party packages.");
+        assert!(!p.agreements_shown());
+    }
+
+    #[test]
+    fn package_block_gives_label_and_link() {
+        let mut p = ProgressParser::new();
+        feed_text(
+            &mut p,
+            "Found Power BI [Microsoft.PowerBI] Version 2.1\n\
+             Agreements for Power BI [Microsoft.PowerBI] Version 2.1\n\
+             Version: 2.1\n\
+             Publisher: Microsoft\n\
+             Agreements:\n\
+             \x20 Microsoft Software License Terms: https://powerbi.microsoft.com/desktop-eula/\n\
+             Package agreements were not agreed to. Operation cancelled.\n",
+        );
         assert!(p.agreements_shown());
+        assert_eq!(
+            p.agreements(),
+            [AgreementEntry {
+                label: "Microsoft Software License Terms".into(),
+                text: None,
+                url: Some("https://powerbi.microsoft.com/desktop-eula/".into()),
+            }]
+        );
+    }
+
+    #[test]
+    fn package_block_keeps_text_and_continuation_lines() {
+        let mut p = ProgressParser::new();
+        feed_text(
+            &mut p,
+            "Agreements for X [A.B] Version 1\n\
+             Agreements:\n\
+             \x20 EULA: You may use this app. https://example.org/eula\n\
+             \x20   Second line of the text\n\
+             \x20 Category: System Components\n",
+        );
+        let a = p.agreements();
+        assert_eq!(a.len(), 2);
+        assert_eq!(a[0].label, "EULA");
+        assert_eq!(
+            a[0].text.as_deref(),
+            Some("You may use this app.\nSecond line of the text")
+        );
+        assert_eq!(a[0].url.as_deref(), Some("https://example.org/eula"));
+        assert_eq!(a[1].text.as_deref(), Some("System Components"));
+        assert_eq!(a[1].url, None);
+    }
+
+    #[test]
+    fn source_block_gives_label_and_link() {
+        let mut p = ProgressParser::new();
+        feed_text(
+            &mut p,
+            "The `msstore` source requires that you view the following agreements before using.\n\
+             Terms of Transaction: https://aka.ms/microsoft-store-terms-of-transaction\n\
+             The source requires the current machine's 2-letter geographic region to be sent to the backend service to function properly (ex. \"US\").\n\
+             One or more of the source agreements were not agreed to. Operation cancelled.\n",
+        );
+        assert!(p.agreements_shown());
+        assert_eq!(p.agreements().len(), 1);
+        assert_eq!(p.agreements()[0].label, "Terms of Transaction");
+    }
+
+    #[test]
+    fn only_safe_https_links_are_links() {
+        for bad in [
+            "http://example.org/a",
+            "javascript:alert(1)",
+            "file:///c:/x",
+            "https://",
+            "https:// example.org",
+            "https://e.org/<b>",
+            "https://e.org/\"x",
+        ] {
+            assert_eq!(safe_https_url(bad), None, "{bad}");
+        }
+        assert!(safe_https_url("https://aka.ms/x?a=1&b=2#f").is_some());
+        let e = parse_agreement_entry("Terms: http://example.org/a").unwrap();
+        assert_eq!(e.url, None);
+        assert_eq!(e.text.as_deref(), Some("http://example.org/a"));
     }
 
     #[test]

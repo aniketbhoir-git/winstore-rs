@@ -155,6 +155,7 @@ fn detail_from_block(block: ShowBlock) -> PackageDetail {
         screenshots: Vec::new(),
         website: block.homepage,
         license: block.license,
+        license_url: block.license_url,
         release_notes: block.release_notes,
         installer: InstallerMetadata {
             architecture: None,

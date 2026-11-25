@@ -41,6 +41,7 @@ pub fn run() {
             commands::check_updates,
             commands::update_all,
             commands::open_store_page,
+            commands::open_agreement_link,
             commands::start_server,
         ])
         .run(tauri::generate_context!());

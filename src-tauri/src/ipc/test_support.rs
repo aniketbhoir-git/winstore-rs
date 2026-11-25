@@ -20,7 +20,7 @@ use crate::domain::{
 };
 use crate::error::{AppError, AppResult};
 use crate::executor::{
-    ExecFuture, InstallRequest, InstalledPackage, OperationHandle, PackageExecutor,
+    ExecFuture, InstallRequest, InstalledPackage, OperationHandle, PackageExecutor, RemoveRequest,
 };
 
 /// A held operation: its event sender and outcome sender, released by `cancel`.
@@ -86,6 +86,9 @@ pub(crate) struct FakeExec {
     pub list_fails: AtomicBool,
     /// How often `list_installed` was called.
     pub list_calls: AtomicU32,
+    /// The requests that `install` and `remove` received, in order.
+    pub install_requests: Mutex<Vec<InstallRequest>>,
+    pub remove_requests: Mutex<Vec<RemoveRequest>>,
 }
 
 impl FakeExec {
@@ -188,8 +191,9 @@ impl PackageExecutor for FakeExec {
     fn install<'a>(
         &'a self,
         p: &'a PackageId,
-        _r: &'a InstallRequest,
+        r: &'a InstallRequest,
     ) -> ExecFuture<'a, OperationHandle> {
+        self.install_requests.lock().unwrap().push(r.clone());
         Box::pin(async move { Ok(self.handle(p, Operation::Install)) })
     }
     fn cancel<'a>(&'a self, op: &'a str) -> ExecFuture<'a, ()> {
@@ -200,7 +204,12 @@ impl PackageExecutor for FakeExec {
         self.release(op);
         Box::pin(async { Ok(()) })
     }
-    fn remove<'a>(&'a self, p: &'a PackageId) -> ExecFuture<'a, OperationHandle> {
+    fn remove<'a>(
+        &'a self,
+        p: &'a PackageId,
+        r: &'a RemoveRequest,
+    ) -> ExecFuture<'a, OperationHandle> {
+        self.remove_requests.lock().unwrap().push(r.clone());
         Box::pin(async move { Ok(self.handle(p, Operation::Remove)) })
     }
     fn list_installed<'a>(&'a self) -> ExecFuture<'a, Vec<InstalledPackage>> {

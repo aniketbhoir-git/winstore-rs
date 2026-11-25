@@ -1,6 +1,15 @@
 use serde::ser::SerializeStruct;
 use serde::{Serialize, Serializer};
 
+/// One agreement that winget printed: a label, an optional text and an optional https link
+/// (SPEC §6.6). The UI shows all three as text.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct AgreementEntry {
+    pub label: String,
+    pub text: Option<String>,
+    pub url: Option<String>,
+}
+
 /// Application-wide error type (SPEC §1.3).
 #[derive(Debug, thiserror::Error)]
 pub enum AppError {
@@ -42,6 +51,11 @@ pub enum AppError {
         version: Option<String>,
         agreement_text: Option<String>,
         agreement_url: Option<String>,
+        /// Every agreement winget printed (label, text, link), for the consent dialog.
+        agreements: Vec<AgreementEntry>,
+        /// Handle that binds a later consent to this package, version, winget source and
+        /// kind (SPEC §6.6 "How consent is bound"). Set by `services/install.rs`.
+        consent_token: Option<String>,
     },
 }
 
@@ -110,9 +124,11 @@ impl Serialize for AppError {
             version,
             agreement_text,
             agreement_url,
+            agreements,
+            consent_token,
         } = self
         {
-            let mut st = serializer.serialize_struct("AppError", 10)?;
+            let mut st = serializer.serialize_struct("AppError", 12)?;
             st.serialize_field("code", self.code())?;
             st.serialize_field("message", &self.to_string())?;
             st.serialize_field("detail", &self.detail())?;
@@ -123,6 +139,8 @@ impl Serialize for AppError {
             st.serialize_field("version", version)?;
             st.serialize_field("agreement_text", agreement_text)?;
             st.serialize_field("agreement_url", agreement_url)?;
+            st.serialize_field("agreements", agreements)?;
+            st.serialize_field("consent_token", consent_token)?;
             return st.end();
         }
         let mut st = serializer.serialize_struct("AppError", 4)?;
@@ -179,6 +197,8 @@ mod tests {
                     version: None,
                     agreement_text: None,
                     agreement_url: None,
+                    agreements: Vec::new(),
+                    consent_token: None,
                 },
                 "agreements_required",
                 false,
@@ -198,7 +218,7 @@ mod tests {
     }
 
     #[test]
-    fn agreements_required_json_carries_six_extra_fields() {
+    fn agreements_required_json_carries_eight_extra_fields() {
         let err = AppError::AgreementsRequired {
             source_agreements: false,
             package_agreements: true,
@@ -206,15 +226,24 @@ mod tests {
             version: None,
             agreement_text: None,
             agreement_url: None,
+            agreements: Vec::new(),
+            consent_token: None,
         };
         let v = serde_json::to_value(&err).unwrap();
         let o = v.as_object().unwrap();
-        assert_eq!(o.len(), 10);
+        assert_eq!(o.len(), 12);
+        assert_eq!(v["agreements"], serde_json::json!([]));
         assert_eq!(v["code"], "agreements_required");
         assert_eq!(v["source_agreements"], false);
         assert_eq!(v["package_agreements"], true);
         assert_eq!(v["winget_source"], "winget");
-        for k in ["version", "agreement_text", "agreement_url", "detail"] {
+        for k in [
+            "version",
+            "agreement_text",
+            "agreement_url",
+            "consent_token",
+            "detail",
+        ] {
             assert!(o.get(k).is_some_and(|x| x.is_null()), "{k}");
         }
         assert_eq!(v["retryable"], false);
