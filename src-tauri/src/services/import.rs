@@ -147,6 +147,8 @@ pub fn is_local_drive_path(requested: &str) -> bool {
 /// (`CON`, `PRN`, `AUX`, `NUL`, `CONIN$`, `CONOUT$`, `COM0-9`, `LPT0-9` and the superscript
 /// forms `COM¹²³`, `LPT¹²³`). Case-insensitive. A trailing dot or space and any extension
 /// (`NUL.json`, `nul .txt`, `NUL...`) do not hide the name: Windows resolves them to the device.
+/// A name with an extension such as `aux.json` is refused on purpose, although Windows 11 opens
+/// it as an ordinary file: the check stays simple and never needs the OS version.
 pub fn has_reserved_device_name(requested: &str) -> bool {
     requested.split(['\\', '/']).any(|comp| {
         let stem = comp.split('.').next().unwrap_or("").trim_end_matches(' ');

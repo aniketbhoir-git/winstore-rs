@@ -60,9 +60,9 @@
         Cancel
       </button>
     </div>
-  {#if op.cancelFailed}
-    <p class="note">{CANCEL_FAILED_TEXT}</p>
-  {/if}
+    {#if op.cancelFailed}
+      <p class="note">{CANCEL_FAILED_TEXT}</p>
+    {/if}
   {:else}
     <div class="row">
       {#if present}
@@ -89,6 +89,7 @@
             <option value="machine">For all users</option>
           </select>
         </label>
+        <span class="note scope-hint">winget asks for the scope and the installer decides.</span>
         <button onclick={install}>{ledger === 'failed' ? 'Try again' : 'Install'}</button>
       {/if}
     </div>
