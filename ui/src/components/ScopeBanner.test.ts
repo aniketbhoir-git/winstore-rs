@@ -55,8 +55,6 @@ describe('install scope choice', () => {
 })
 
 describe('administrator banner', () => {
-  beforeAll(() => installBridge())
-
   it('shows when the app is elevated', async () => {
     mockBackend({ app_status: () => ({ elevated: true }) })
     render(AdminBanner)
@@ -72,8 +70,6 @@ describe('administrator banner', () => {
 })
 
 describe('hardening texts', () => {
-  beforeAll(() => installBridge())
-
   it('elevation_required shows the text of design section 1 rule 6', () => {
     expect(
       errorText({ code: 'elevation_required', message: 'raw', detail: null, retryable: false }),
