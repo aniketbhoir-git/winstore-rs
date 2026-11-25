@@ -1,4 +1,4 @@
-// L2: the scope choice reaches start_install; the banner follows app_status.
+// L2: the scope choice and its hint, the admin banner, and the hardening texts.
 import { emit } from '@tauri-apps/api/event'
 import { fireEvent, render, screen, waitFor } from '@testing-library/svelte'
 import { beforeAll, describe, expect, it } from 'vitest'
@@ -42,6 +42,13 @@ describe('install scope choice', () => {
     await waitFor(() => expect(calls).toHaveLength(1))
     return calls[0]
   }
+
+  it('says that winget asks for the scope and the installer decides', () => {
+    operations.byPackage = {}
+    mockBackend({})
+    render(DetailActions, { pkg, versions: [], status: null })
+    expect(screen.getByText(/the installer decides/)).toBeTruthy()
+  })
 
   it('Default sends no scope', async () => {
     const call = await installWith(null)

@@ -60,9 +60,9 @@
         Cancel
       </button>
     </div>
-  {#if op.cancelFailed}
-    <p class="note">{CANCEL_FAILED_TEXT}</p>
-  {/if}
+    {#if op.cancelFailed}
+      <p class="note">{CANCEL_FAILED_TEXT}</p>
+    {/if}
   {:else}
     <div class="row">
       {#if present}
@@ -81,14 +81,17 @@
             </select>
           </label>
         {/if}
-        <label>
-          <span class="sr">Install scope</span>
-          <select bind:value={scope}>
-            <option value="">Default</option>
-            <option value="user">Only for me</option>
-            <option value="machine">For all users</option>
-          </select>
-        </label>
+        <div class="scope">
+          <label>
+            <span class="sr">Install scope</span>
+            <select bind:value={scope}>
+              <option value="">Default</option>
+              <option value="user">Only for me</option>
+              <option value="machine">For all users</option>
+            </select>
+          </label>
+          <span class="note scope-hint">winget asks for the scope and the installer decides.</span>
+        </div>
         <button onclick={install}>{ledger === 'failed' ? 'Try again' : 'Install'}</button>
       {/if}
     </div>
@@ -125,6 +128,10 @@
     display: flex;
     gap: 0.6rem;
     align-items: center;
+  }
+  .scope {
+    display: flex;
+    flex-direction: column;
   }
   .progress {
     align-items: flex-end;

@@ -204,18 +204,33 @@ pub async fn scan_if_due(core: &Core, now: i64) -> ScanOutcome {
 }
 
 /// The timer: the first tick comes at once, then every `TICK`. Runs until the task is dropped.
-pub async fn run(core: Arc<Core>, clock: impl Fn() -> i64) {
-    run_every(core, clock, TICK).await
+/// `get_core` runs on each tick; a tick where it fails (the core is not built yet) is skipped, so
+/// one timer is enough however late the core comes up.
+pub async fn run<F, Fut>(get_core: F, clock: impl Fn() -> i64)
+where
+    F: Fn() -> Fut,
+    Fut: std::future::Future<Output = AppResult<Arc<Core>>>,
+{
+    run_every(get_core, clock, TICK).await
 }
 
 /// `run` with its own tick length (tests use a short one).
-pub(crate) async fn run_every(core: Arc<Core>, clock: impl Fn() -> i64, tick: Duration) {
+pub(crate) async fn run_every<F, Fut>(get_core: F, clock: impl Fn() -> i64, tick: Duration)
+where
+    F: Fn() -> Fut,
+    Fut: std::future::Future<Output = AppResult<Arc<Core>>>,
+{
     let mut interval = tokio::time::interval(tick);
     interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     loop {
         interval.tick().await;
-        let outcome = scan_if_due(&core, clock()).await;
-        tracing::debug!(?outcome, "update scan tick");
+        match get_core().await {
+            Ok(core) => {
+                let outcome = scan_if_due(&core, clock()).await;
+                tracing::debug!(?outcome, "update scan tick");
+            }
+            Err(e) => tracing::warn!("update scan tick skipped, no core yet: {e}"),
+        }
     }
 }
 

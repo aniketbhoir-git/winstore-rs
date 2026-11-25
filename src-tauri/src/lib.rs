@@ -30,14 +30,19 @@ pub fn run() {
         .setup(move |app| {
             notifier.attach(app.handle());
             focus.attach(app.handle());
-            // Warm up the database in the background; commands also build it on first use.
+            // The update scan timer (SPEC §6.10); it scans only when the setting is on. It asks
+            // for the core on each tick, so a failed start-up does not stop it for good. Commands
+            // also build the core on first use.
             let handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
-                match handle.state::<AppState>().core().await {
-                    // The update scan timer (SPEC §6.10); it scans only when the setting is on.
-                    Ok(core) => services::schedule::run(core, domain::now_unix).await,
-                    Err(e) => tracing::error!("start-up failed: {e}"),
-                }
+                services::schedule::run(
+                    || {
+                        let handle = handle.clone();
+                        async move { handle.state::<AppState>().core().await }
+                    },
+                    domain::now_unix,
+                )
+                .await;
             });
             Ok(())
         })

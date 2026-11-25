@@ -268,7 +268,15 @@ async fn the_timer_ticks_at_start_then_on_every_tick() {
         let now = now.clone();
         move || now.load(Ordering::SeqCst)
     };
-    let task = tokio::spawn(run_every(r.core.clone(), clock, Duration::from_millis(20)));
+    let core = r.core.clone();
+    let task = tokio::spawn(run_every(
+        move || {
+            let core = core.clone();
+            async move { Ok(core) }
+        },
+        clock,
+        Duration::from_millis(20),
+    ));
     // First tick at once: one scan. Later ticks find the scan not due.
     wait_until("the first scan", || async { calls(&r) == 1 }).await;
     tokio::time::sleep(Duration::from_millis(100)).await;
@@ -276,5 +284,34 @@ async fn the_timer_ticks_at_start_then_on_every_tick() {
     // A day later the next tick finds it due.
     now.store(1_000_000 + DAY, Ordering::SeqCst);
     wait_until("the second scan", || async { calls(&r) == 2 }).await;
+    task.abort();
+}
+
+#[tokio::test]
+async fn the_timer_skips_ticks_until_the_core_exists() {
+    let r = rig(Some("daily"), vec![]).await;
+    let asked = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let (core, n) = (r.core.clone(), asked.clone());
+    let task = tokio::spawn(run_every(
+        move || {
+            let core = core.clone();
+            let n = n.clone();
+            async move {
+                // The first two asks fail, as when start-up has not built the core yet.
+                if n.fetch_add(1, Ordering::SeqCst) < 2 {
+                    Err(AppError::Unsupported("not yet".into()))
+                } else {
+                    Ok(core)
+                }
+            }
+        },
+        || 1_000_000,
+        Duration::from_millis(20),
+    ));
+    wait_until("the scan after the core came up", || async {
+        calls(&r) == 1
+    })
+    .await;
+    assert!(asked.load(Ordering::SeqCst) >= 3);
     task.abort();
 }

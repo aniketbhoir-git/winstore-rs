@@ -90,7 +90,9 @@ follows from this.
 3. `start_install` takes `scope` (`user`, `machine` or none). This option exists in the code
    (`InstallScope`, `ipc/commands.rs`). The detail page gets a scope choice: "Default",
    "Only for me" (`user`), "For all users" (`machine`). "Default" passes no `--scope` flag,
-   so winget decides. This is the behavior of today (see "Decisions" 1).
+   so winget decides. This is the behavior of today (see "Decisions" 1). A short hint under
+   the select says: "winget asks for the scope and the installer decides." (an EXE installer
+   can ignore the choice; see Risks).
 4. Uninstall and update pass no scope. winget uses `--scope` there as a filter of the
    installed scope only (`winget-executor` skill), and the ledger does not store a scope.
 5. Exit codes. The map exists in `executor/winget_parse.rs`: `0x8A150019`

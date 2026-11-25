@@ -31,35 +31,27 @@ Rust stable · Tauri 2 · Svelte/TypeScript · SQLite (sqlx) · tokio · windows
 This environment runs `tier:max` issues (winget parser, install loop, msstore adapter,
 elevation). `tier:any` issues are reserved for community contributors on cheaper models.
 
-## Status (2026-11-13)
-- Done on `main`: #1 scaffold + CI, #2 domain model + persistence, #3 community catalog
-  (winget.run, PR #14), #4 winget executor + progress parser (PR #15), #5 Tauri IPC layer + UI
-  skeleton (PR #18).
-- Built, not merged: #6 (detail page, install/uninstall/cancel, log tail) on
-  `impl/6--install-loop`, PR #19. Do not merge it before the spike and the core work of WP5 are
-  done (SPEC §7, WP5, steps 1 and 2; both are done). The UI work (step 3) is a second pull request; it waits
-  for the approved `docs/designs/unattended-testing.md`. Maintainer decisions of 2026-11-12:
-  this split, the license-link fallback of SPEC §6.6, and the minimum versions in SPEC §2.
-  Spike of SPEC §6.6 done on 2026-11-13 (`docs/spikes/2026-11-13-agreement-consent.md`): WP5
-  builds case (c) (no consent option, never an agreement flag); case (b) is later work, F4 in
-  `docs/ISSUE-BACKLOG.md`. WP5 step 2, the core work, is done on the branch (2026-11-13). Next
-  for PR #19: the maintainer's push and merge decision. Then step 3 (a second pull request)
-  and F4. Step 3 is built on `impl/6--ui-step3` (2026-11-25): no-text message, disabled Cancel, version filter, UI tests.
-  F4 (case (b), #45) is built on `impl/45--consent-case-b` (2026-11-25): `consent` option on install and uninstall (source kind only), agreement block parser, consent dialog, consent bound to package, version, winget source and kind by a challenge token (SPEC §6.6 "How consent is bound").
-- `docs/SPEC.md` was repaired and reviewed with EGM on 2026-11-11 and 2026-11-12. The reports
-  are in `docs/reviews/2026-11-11-spec-review-2/`. A section marked *built* or *built on
-  branch* follows the code; a *planned* section overrides it. Where a built section and the
-  code disagree, stop and report; do not rebuild code that exists. The open review actions
-  (A5 to A25) are in `docs/reviews/2026-11-11-spec-review.md`.
-- Known bug: search returns unrelated results (the winget.run service does). See F1 in
-  `docs/ISSUE-BACKLOG.md`; it raises #16 to an MVP blocker.
-- Requirement: all testing must run unattended, for contributors also. See F2. Run
+## Status (2026-11-25)
+- On `main`: #1 scaffold + CI, #2 domain model + persistence, #3 community catalog, #4 winget
+  executor + progress parser, #5 IPC layer + UI skeleton, #6 install loop (core and UI), F4
+  agreement consent (#45). Catalog design (`docs/designs/`): steps 1 to 3 and 5 to 7 built;
+  step 4 is owner-gated. Testing design (F2): steps 1 to 4 and 6 built. #12 (hardening, toasts,
+  export/import, update scan): steps 1 to 6 built; step 7 waits for WP6, step 8 for the owner.
+- Open owner decisions: catalog step 4 and the ADR 0001 confirmation; ADR 0002 (PR #47); the
+  #33 agreement decision; the #12 questions in `docs/designs/hardening.md`.
+- `docs/SPEC.md` was repaired and reviewed with EGM (reports in
+  `docs/reviews/2026-11-11-spec-review-2/`). A section marked *built* follows the code; a
+  *planned* section overrides it. Where a built section and the code disagree, stop and
+  report; do not rebuild code that exists. Open review actions are in
+  `docs/reviews/2026-11-11-spec-review.md`.
+- Requirement: all testing runs unattended, for contributors also. Run
   `powershell -File scripts/test.ps1` (L1 Rust + L2 UI; report in `src-tauri/target/test-report.md`).
   The real-winget test refuses to run off a GitHub-hosted runner; no other test may call
-  `WingetCli::connect`. Design: `docs/designs/unattended-testing.md`. F2 steps 1 to 4 and 6 are
-  built; steps 5 (fork approval setting) and 7 (follow-up issues) are open.
-- Next: the "Review follow-ups" section of `docs/ISSUE-BACKLOG.md`, in the order the review
-  file suggests.
+  `WingetCli::connect`. Design: `docs/designs/unattended-testing.md`. F2 steps 5 (fork
+  approval setting) and 7 (follow-up issues) are open.
+- Known bug: search returns unrelated results (the winget.run service does; F1, #20, #16).
+  Catalog step 4 (wire the winget CLI source) fixes it; it waits for the owner.
+- Next: the "Review follow-ups" section of `docs/ISSUE-BACKLOG.md`.
 
 ## Design workflow — Elephant-Goldfish Model (EGM)
 - Design decisions go through the `egm` plugin. Its skills are user-invoked: name the command
@@ -102,7 +94,9 @@ elevation). `tier:any` issues are reserved for community contributors on cheaper
   `PackageExecutor` trait, winget subprocess wrapper (the stop function is a field, `StopFn`, for tests), progress parser; the fake is a cargo example.
 - `src-tauri/src/ipc/{commands,events,state}.rs` — Tauri commands (`search_sources`, `get_app_detail`, `start_install`, `cancel_install`, `check_updates`, `update_all`, `open_store_page`, `start_server` stub), `store:*` events, lazy `AppState`/`Core`; handlers are plain async fns tested in `ipc/tests.rs`.
 - `src-tauri/src/services/{install,consent}.rs` — install lifecycle; `consent.rs` holds the in-memory agreement challenges and checks a consent against them.
-- `ui/src/{lib,components,routes}` — typed API client + event subscriptions, `Search.svelte` (debounced), `AppCard`, `InstallButton`, `ConsentDialog` (agreement consent, F4), `ProgressBar`, `SourceBadge`.
+- `src-tauri/src/services/{export,import,notify,schedule}.rs` — export/import of winget JSON (paths checked as strings first), toast decisions, the in-app update scan timer.
+- `src-tauri/src/platform/{mod,windows}.rs` — Windows seams behind traits: `Notifier`, window focus, elevation check (fakes for tests).
+- `ui/src/{lib,components,routes}` — typed API client + event subscriptions, `Search.svelte` (debounced), `AppCard`, `InstallButton`, `ConsentDialog` (agreement consent, F4), `ProgressBar`, `SourceBadge`, `DetailActions`, `DetailHeader`, `AdminBanner`, `LogTail`, `ExportPanel`, `ImportPanel`, `UpdateScanSetting`, `ui/src/routes/AppDetail.svelte`.
 
 ## Project skills
 - `winget-executor` — winget CLI facts, output/exit-code parsing, cancellation, fake-winget tests for #4 and #6 — `.claude/skills/winget-executor/SKILL.md`
