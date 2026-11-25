@@ -21,7 +21,7 @@
     <ProgressBar fraction={op.fraction} indeterminate={op.indeterminate} label={`${op.stage}${op.message ? ': ' + op.message : ''}`} />
     <button
       class="secondary"
-      disabled={op.cancelFailed}
+      disabled={!op.operationId || op.cancelFailed}
       title={op.cancelFailed ? 'Cancel did not stop the installer' : undefined}
       onclick={() => operations.cancel(pkg.id)}>Cancel</button>
   </div>
