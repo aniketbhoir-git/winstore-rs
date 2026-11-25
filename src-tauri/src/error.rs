@@ -33,7 +33,7 @@ pub enum AppError {
     Cancelled,
     #[error("unsupported: {0}")]
     Unsupported(String),
-    #[error("administrator permission is required")]
+    #[error("This app needs administrator rights to install. Windows did not give them. Try again and accept the Windows prompt, or choose 'Only for me' if the app supports it.")]
     ElevationRequired,
     #[error("invalid configuration: {0}")]
     InvalidConfig(String),
