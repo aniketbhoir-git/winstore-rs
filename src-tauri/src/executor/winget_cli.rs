@@ -36,10 +36,14 @@ use crate::error::{AgreementEntry, AppError, AppResult};
 pub const PATH_OVERRIDE_ENV: &str = "STORE_WINGET_PATH";
 
 const CAPTURE_TIMEOUT: Duration = Duration::from_secs(120);
-/// Limit of `winget list`; the install service waits for it after each success (SPEC §6.7).
+/// Limit of the full `winget list` (Library, SPEC §6.7). The one-package call after an install
+/// uses `LIST_ONE_TIMEOUT`.
 const LIST_TIMEOUT: Duration = Duration::from_secs(120);
 /// The `winget list` call narrowed to one package id.
 const LIST_ONE_TIMEOUT: Duration = Duration::from_secs(30);
+/// After winget itself has exited, how long a read-only call still waits for its pipes to
+/// close. A child that outlives winget and holds a pipe open must not fail the call.
+const PIPE_GRACE: Duration = Duration::from_secs(2);
 const PROBE_TIMEOUT: Duration = Duration::from_secs(15);
 /// Time limit of one `winget search` call (design catalog-winget-cli, section 2).
 pub const SEARCH_TIMEOUT: Duration = Duration::from_secs(15);
@@ -220,9 +224,11 @@ pub fn list_installed_args() -> Vec<String> {
     s(&["list", "--disable-interactivity"])
 }
 
-/// `winget list` narrowed to one package id (exact match, any source). Never an agreement flag.
+/// `winget list` narrowed to one package id (any source). No `--exact`: winget matches ids
+/// case-sensitively with it, but package ids are case-insensitive, so `query_installed_one`
+/// keeps the rows whose id equals `id` ignoring case. Never an agreement flag.
 pub fn list_installed_one_args(id: &str) -> Vec<String> {
-    s(&["list", "--id", id, "--exact", "--disable-interactivity"])
+    s(&["list", "--id", id, "--disable-interactivity"])
 }
 
 /// `winget export` of the installed packages that the `winget` source knows, to `path`
@@ -727,29 +733,50 @@ impl WingetCli {
     /// tree is stopped (Job Object, `taskkill /T /F` as fallback), as for an install, so no
     /// child of winget outlives the call.
     async fn run_capture_timeout(&self, args: &[String], limit: Duration) -> AppResult<Captured> {
-        async fn read_all<R: AsyncRead + Unpin>(pipe: Option<R>) -> Vec<u8> {
-            let mut buf = Vec::new();
-            if let Some(mut p) = pipe {
-                let _ = p.read_to_end(&mut buf).await;
+        /// Appends what the pipe yields to `buf` as it arrives, so a partial read survives.
+        async fn read_into<R: AsyncRead + Unpin>(pipe: Option<R>, buf: Arc<Mutex<Vec<u8>>>) {
+            let Some(mut p) = pipe else { return };
+            let mut chunk = [0u8; 8192];
+            while let Ok(n) = p.read(&mut chunk).await {
+                if n == 0 {
+                    break;
+                }
+                buf.lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .extend_from_slice(&chunk[..n]);
             }
-            buf
         }
         let mut child = self.spawn(args)?;
         let job = ProcessJob::attach(&child);
-        let stdout = child.stdout.take();
-        let stderr = child.stderr.take();
-        let finished = tokio::time::timeout(limit, async {
-            let (out, err, status) = tokio::join!(read_all(stdout), read_all(stderr), child.wait());
-            (out, err, status)
-        })
-        .await;
-        match finished {
-            Ok((out, err, status)) => Ok(Captured {
-                code: status?.code().unwrap_or(-1),
-                stdout: String::from_utf8_lossy(&out).into_owned(),
-                stderr: String::from_utf8_lossy(&err).into_owned(),
-            }),
+        let out_buf = Arc::new(Mutex::new(Vec::new()));
+        let err_buf = Arc::new(Mutex::new(Vec::new()));
+        let mut readers = tokio::spawn({
+            let (o, e) = (Arc::clone(&out_buf), Arc::clone(&err_buf));
+            let (so, se) = (child.stdout.take(), child.stderr.take());
+            async move { tokio::join!(read_into(so, o), read_into(se, e)) }
+        });
+        match tokio::time::timeout(limit, child.wait()).await {
+            Ok(status) => {
+                let status = status?;
+                // winget is gone. A grandchild may still hold a pipe; use what was read.
+                if tokio::time::timeout(PIPE_GRACE, &mut readers)
+                    .await
+                    .is_err()
+                {
+                    readers.abort();
+                }
+                let take = |b: &Arc<Mutex<Vec<u8>>>| {
+                    String::from_utf8_lossy(&b.lock().unwrap_or_else(|e| e.into_inner()))
+                        .into_owned()
+                };
+                Ok(Captured {
+                    code: status.code().unwrap_or(-1),
+                    stdout: take(&out_buf),
+                    stderr: take(&err_buf),
+                })
+            }
             Err(_) => {
+                readers.abort();
                 let stop = self.inner.stop;
                 stop(&mut child, job.as_ref()).await;
                 let _ = child.wait().await;
@@ -925,10 +952,14 @@ impl WingetCli {
             .await
     }
 
-    /// `winget list --id <id> --exact`: the rows of one package, with the short limit.
+    /// `winget list --id <id>`: the rows of one package, with the short limit. winget matches
+    /// the id as a substring; the rows kept have an id equal to `id`, ignoring case.
     pub async fn query_installed_one(&self, id: &str) -> AppResult<Vec<InstalledPackage>> {
-        self.query_installed_with(list_installed_one_args(id), LIST_ONE_TIMEOUT)
-            .await
+        let mut rows = self
+            .query_installed_with(list_installed_one_args(id), LIST_ONE_TIMEOUT)
+            .await?;
+        rows.retain(|r| r.id.eq_ignore_ascii_case(id));
+        Ok(rows)
     }
 
     async fn query_installed_with(

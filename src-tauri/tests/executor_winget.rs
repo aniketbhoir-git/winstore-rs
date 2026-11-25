@@ -660,22 +660,54 @@ async fn list_installed_parses_table() {
     assert_eq!(fx.last_argv(), ["list", "--disable-interactivity"]);
 }
 
+const LIST_ROWS: &str = "out Name                 Id                Version   Source
+out ----------------------------------------------------------
+listrow 7zip.7zip 7-Zip 26.05 (x64)    7zip.7zip         26.05     winget
+listrow 7zip.7zip.Beta 7-Zip Beta           7zip.7zip.Beta    27.00     winget
+exit 0
+";
+
 #[tokio::test]
-async fn list_installed_one_filters_by_exact_id_and_never_passes_an_agreement_flag() {
-    let fx = Fx::new(LIST_TABLE);
-    let rows = fx.cli.list_installed_one("7zip.7zip").await.unwrap();
-    assert_eq!(rows.len(), 3);
+async fn list_installed_one_matches_the_id_ignoring_case_and_never_passes_an_agreement_flag() {
+    let fx = Fx::new(LIST_ROWS);
+    // The stored id may be in another case; winget ids are case-insensitive. One winget call.
+    let rows = fx.cli.list_installed_one("7ZIP.7zip").await.unwrap();
+    assert_eq!(rows.len(), 1, "{rows:?}");
+    assert_eq!(rows[0].id, "7zip.7zip");
+    assert_eq!(rows[0].version, "26.05");
+    assert_eq!(fx.invocations().len(), 1);
     assert_eq!(
         fx.last_argv(),
-        [
-            "list",
-            "--id",
-            "7zip.7zip",
-            "--exact",
-            "--disable-interactivity"
-        ]
+        ["list", "--id", "7ZIP.7zip", "--disable-interactivity"]
     );
     assert!(accept_flags(&fx.last_argv()).is_empty());
+}
+
+#[tokio::test]
+async fn list_installed_survives_a_grandchild_that_holds_stdout() {
+    // winget exits, a child it started keeps the pipe open for 6 s. The call answers from
+    // what was read, without a timeout error, after the short pipe grace.
+    let dir = tempfile::tempdir().unwrap();
+    let child_pid = dir.path().join("child.txt");
+    let fx = Fx::build(
+        &LIST_TABLE.replace(
+            "exit 0
+",
+            "child 6000
+exit 0
+",
+        ),
+        &[("FAKE_WINGET_CHILD_PID", child_pid.to_str().unwrap())],
+        None,
+    );
+    let started = std::time::Instant::now();
+    let rows = fx.cli.list_installed().await.unwrap();
+    assert_eq!(rows.len(), 3);
+    assert!(
+        started.elapsed() < Duration::from_secs(5),
+        "{:?}",
+        started.elapsed()
+    );
 }
 
 #[tokio::test]
