@@ -566,7 +566,8 @@ pub struct SearchRow {
     pub id: String,
     /// Position 2.
     pub version: String,
-    /// Position 3 and later (Match, Source); unused.
+    /// Position 3 and later (Match, Source); unused. `extra[i]` is header column `i + 3`; an
+    /// empty cell stays as an empty string, so positions hold.
     pub extra: Vec<String>,
 }
 
@@ -655,7 +656,7 @@ pub fn parse_columns(text: &str) -> Option<Columns> {
             id: it.next().unwrap_or_default(),
             version: it.next().unwrap_or_default(),
             // Real winget leaves the Match cell empty on some rows (no match reason).
-            extra: it.filter(|c| !c.is_empty()).collect(),
+            extra: it.collect(),
         });
     }
     Some(out)
@@ -1381,7 +1382,26 @@ Armoury Crate Service      ARP\\Machine\\X64\\Armoury Crate Service 6.7.6.0
         assert_eq!(c.rows[8].name, "VLC media player (Nightly)");
         assert_eq!(c.rows[8].id, "VideoLAN.VLC.Nightly");
         assert_eq!(c.rows[8].version, "4.0.0");
-        assert!(c.rows[8].extra.is_empty());
+        assert_eq!(c.rows[8].extra, vec![String::new()]);
+    }
+
+    #[test]
+    fn columns_keep_the_position_of_an_empty_cell() {
+        let row = |a: &str, b: &str, c: &str, d: &str, e: &str| {
+            format!(
+                "{a:<9}{b:<10}{c:<9}{d:<14}{e}
+"
+            )
+        };
+        let text = row("Name", "Id", "Version", "Match", "Source")
+            + &"-".repeat(50)
+            + "
+" + &row("Foo", "A.Foo", "1.0", "", "winget")
+            + &row("Bar", "B.Bar", "2.0", "Tag: bar", "winget");
+        let text = text.as_str();
+        let c = parse_columns(text).unwrap();
+        assert_eq!(c.rows[0].extra, ["", "winget"]);
+        assert_eq!(c.rows[1].extra, ["Tag: bar", "winget"]);
     }
 
     #[test]
