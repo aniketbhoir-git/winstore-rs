@@ -86,6 +86,10 @@ pub(crate) struct FakeExec {
     pub list_fails: AtomicBool,
     /// How often `list_installed` was called.
     pub list_calls: AtomicU32,
+    /// Calls of `list_updates` (the update scan).
+    pub update_calls: AtomicU32,
+    /// Error for the next `list_updates` call.
+    pub updates_error: Mutex<Option<AppError>>,
     /// How often `list_installed_one` was called.
     pub list_one_calls: AtomicU32,
     /// The requests that `install` and `remove` received, in order.
@@ -238,6 +242,10 @@ impl PackageExecutor for FakeExec {
         Box::pin(async move { Ok(rows) })
     }
     fn list_updates<'a>(&'a self) -> ExecFuture<'a, Vec<UpdateAvailable>> {
+        self.update_calls.fetch_add(1, Ordering::SeqCst);
+        if let Some(e) = self.updates_error.lock().unwrap().take() {
+            return Box::pin(async move { Err(e) });
+        }
         let u = self.updates.clone();
         Box::pin(async move { Ok(u) })
     }
@@ -298,6 +306,22 @@ pub(crate) async fn wait_for(sink: &RecordingSink, event: &str) -> serde_json::V
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
     panic!("event {event} never arrived");
+}
+
+/// Polls `cond` every 10 ms until it holds; panics after 5 s. For work that a background task
+/// finishes, where a fixed sleep either wastes time or races.
+pub(crate) async fn wait_until<F, Fut>(what: &str, mut cond: F)
+where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = bool>,
+{
+    for _ in 0..500 {
+        if cond().await {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    panic!("timed out waiting for {what}");
 }
 
 /// Like `state_with` for the default source, with the given toast parts.

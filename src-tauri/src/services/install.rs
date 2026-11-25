@@ -64,7 +64,7 @@ impl ActiveOperations {
         self.0.lock().unwrap_or_else(|e| e.into_inner())
     }
 
-    fn insert(&self, id: &PackageId, operation_id: &str, operation: Operation) {
+    pub(crate) fn insert(&self, id: &PackageId, operation_id: &str, operation: Operation) {
         self.lock().insert(
             id.clone(),
             ActiveOperation {
@@ -85,7 +85,7 @@ impl ActiveOperations {
     }
 
     /// Removes the entry only while it still belongs to `operation_id`.
-    fn finish(&self, id: &PackageId, operation_id: &str) {
+    pub(crate) fn finish(&self, id: &PackageId, operation_id: &str) {
         let mut map = self.lock();
         if map.get(id).is_some_and(|a| a.operation_id == operation_id) {
             map.remove(id);
@@ -94,6 +94,11 @@ impl ActiveOperations {
 
     pub fn get(&self, id: &PackageId) -> Option<ActiveOperation> {
         self.lock().get(id).cloned()
+    }
+
+    /// True when no operation runs (the scan waits otherwise, SPEC §6.10).
+    pub fn is_empty(&self) -> bool {
+        self.lock().is_empty()
     }
 }
 
@@ -445,6 +450,8 @@ pub(crate) async fn drive(
         tracing::error!(package = %id, "could not update install ledger: {e}");
     }
     core.active.finish(id, &handle.operation_id);
+    // Before the event: the toast decision is made once the UI hears the end.
+    super::notify::operation_finished(core, id, op, &result).await;
     emit(
         sink.as_ref(),
         EVENT_OPERATION_FINISHED,
@@ -455,7 +462,6 @@ pub(crate) async fn drive(
             error: result.as_ref().err().map(error_json),
         },
     );
-    super::notify::operation_finished(core, id, op, &result).await;
     result
 }
 

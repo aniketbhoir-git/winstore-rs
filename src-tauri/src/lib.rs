@@ -33,8 +33,10 @@ pub fn run() {
             // Warm up the database in the background; commands also build it on first use.
             let handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
-                if let Err(e) = handle.state::<AppState>().core().await {
-                    tracing::error!("start-up failed: {e}");
+                match handle.state::<AppState>().core().await {
+                    // The update scan timer (SPEC §6.10); it scans only when the setting is on.
+                    Ok(core) => services::schedule::run(core, domain::now_unix).await,
+                    Err(e) => tracing::error!("start-up failed: {e}"),
                 }
             });
             Ok(())
@@ -72,6 +74,8 @@ pub fn run() {
             commands::get_install_status,
             commands::get_operation_log,
             commands::check_updates,
+            commands::get_update_scan,
+            commands::set_update_scan,
             commands::update_all,
             commands::open_store_page,
             commands::open_agreement_link,

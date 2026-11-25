@@ -1,0 +1,5 @@
+Name                       Id                         Version      Available
+-----------------------------------------------------------------------------
+7-Zip 26.05 (x64)          7zip.7zip                  26.05        26.06
+Windows Terminal           Microsoft.WindowsTerminal  1.24.12741.0 1.25.2733.0
+2 upgrades available.

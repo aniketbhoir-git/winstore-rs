@@ -388,7 +388,9 @@ The values of `Operation` and `OperationStage` are shown as their wire strings.
   pinned, last_update_check, last_updated. The table also has an `auto_update` column with the
   default true. No work package defines automatic updates, and no code may act on the column.
 - `sources` — enabled/disabled, priority, kind, extra config, last_sync.
-- `settings` — key/value: theme, cache_ttl, update interval, default source exclusions.
+- `settings` — key/value: theme, cache_ttl, update interval, default source exclusions. Keys
+  of WP11: `notifications_enabled` (`"false"` turns toasts off, §6.9), `update_scan`
+  (`off`, `daily`, `weekly`), `update_scan_last`, `update_scan_last_ids` (§6.10).
 - `operation_log` — id, ts, level, operation, package_id, message, detail (for UI "log" pane).
 
 Rules: SQLite used only for cache + local state (never auth); all DB access behind async
@@ -441,6 +443,8 @@ All handlers are in `ipc/commands.rs`. Each one wraps a plain async function tha
 | `get_operation_log` | `package_id`, `limit?` | `Vec<OperationLogEntry>` | The log tail, oldest first. Default 100 rows, maximum 500. |
 | `check_updates` | none | `Vec<UpdateAvailable>` | Read-only list (§6.3). Does not write the ledger. |
 | `update_all` | none | `UpdatesSummaryEvent` | Sequential updates with progress. The command exists; WP6 adds its UI and finishes its behavior (§6.3). |
+| `get_update_scan` | none | string | The saved update-scan mode: `off`, `daily` or `weekly` (*built on branch, WP11 step 4*; §6.10). |
+| `set_update_scan` | `mode` | nothing | Saves the mode. Any other text: `invalid_config`, nothing saved (*built on branch, WP11 step 4*; §6.10). |
 | `open_store_page` | `product_id` | nothing | Checks the id, then opens the official product page in the browser. |
 | `export_packages` | none | `ExportResult { path, file_name, package_count }` | Runs `winget export -o <temp> --source winget --disable-interactivity`, checks the file with the import parser, writes it through a temp file and a rename to `Documents\Store\exports\store-export-<date>.json` (*built on branch, WP11 step 5*; §6.11). Never an agreement flag; `agreements_required` writes nothing. |
 | `open_exports_folder` | none | nothing | Creates the exports folder if needed and opens it with `%WINDIR%\explorer.exe` (full path) (*built on branch, WP11 step 5*). The path is the core's own. |
@@ -901,7 +905,7 @@ The review ids are from `docs/reviews/2026-11-11-spec-review.md`.
 |---|---|---|---|
 | none | A cancel that cannot stop the tree is not reported to the UI. The Cancel button stays and does nothing. | *Fixed on the branch (2026-11-13); the UI part, to disable Cancel, is step 3.* The condition: the tree is still alive after the Job Object stop and after `taskkill` (the site of the Warn row in `executor/winget_cli.rs`). The executor then emits one `store:progress` event with the stage unchanged, `cancel_failed` = true (§4.2) and the message "cancel failed: the installer continues". The progress call of today can drop an event. This send waits for room in the channel, for 2 s at most; after 2 s the executor writes a Warn row and continues. The send must not use the slot that is kept for the terminal event. The UI disables Cancel for that operation when `cancel_failed` is true; it does not match the message text. Test seam: the function that stops the tree becomes a field of the executor, with the real `kill_tree` as the default. Test: a stop function that reports a live tree. | WP5 |
 | A2 | No agreement consent. | §6.6. *Case (c) is built on the branch (2026-11-13); case (b) is F4.* | WP5 |
-| none | `check_updates` names no winget source, so it queries each winget source that is configured. | Name the `winget` winget source (§6.3). | WP6 |
+| none | `check_updates` names no winget source, so it queries each winget source that is configured. | Name the `winget` winget source (§6.3). *Built on branch (WP11 step 4): `list_updates_args` passes `--source winget`.* | WP6 |
 | none | A cancelled uninstall records `Installed` when no version is recorded. | The cancel goes to the rest state. *Fixed on the branch (2026-11-13).* | WP5 |
 | A24 | "An operation is active" returns `unsupported`, and the UI cannot separate it from other refusals. | Add the code `busy`, retryable. | WP6 |
 | none | The recorded version is the catalog target, not the version that winget installed. | *Built (2026-11-25, catalog plan step 7).* After a successful install or update, `services/install.rs` reads the version from `winget list` (`list_installed`) and records it. When the list call fails or has no row for the package, the catalog target stays and one Warn row says why. A difference between the two writes a Warn row. A listed version of `Unknown` or a range (`<`, `>`) counts as no row. The call is narrowed to the package: `list_installed_one` runs `winget list --id <id> --exact --disable-interactivity` with a 30 s limit (`LIST_ONE_TIMEOUT`). The full `list_installed` (Library) keeps no filter and has a 120 s limit (`LIST_TIMEOUT`). | The F1 fix |
@@ -950,17 +954,62 @@ Design: `docs/designs/hardening.md` section 2. Built with the `windows` crate (�
    All text is escaped as XML text.
 3. A click runs an in-process `Activated` handler that shows, restores and focuses the main
    window. Activation after the app has closed is not handled.
-4. `services/notify.rs`, called at the end of `install::drive`: an operation (install, update,
-   uninstall) that ends while the window has no focus gives one toast, "Install finished" /
+4. `services/notify.rs`, called in `install::drive` just before the finished event: an
+   operation (install, update, uninstall) that ends while the window has no focus gives one toast, "Install finished" /
    "Foo.Bar was installed.", "Install failed" / "Foo.Bar did not finish. Open Store for
    details.", or, for `agreements_required`, "Open Store to review an agreement." A cancel
-   gives none (the user did it). No toast when `notifications_enabled` is `"false"`.
-5. A failed toast call writes one Warn row to the trace log and nothing else. A shown toast
-   writes one Info row. No network call, no other record.
-6. Not built here: the toast of a scheduled scan (step 5) and a settings command or UI for
+   gives none (the user did it). No toast when `notifications_enabled` is the text `"false"`;
+   any other value, or none, counts as on. The checks run in the operation; the call into
+   Windows runs on a blocking thread in a background task (`notify::show`), so `update_all`
+   never waits for a toast. A failure or a panic of that call does not change the result of
+   the operation or its finished event (`ok` stays as the operation ended).
+5. A failed toast call writes one Warn row (message "toast failed: ...") to the operation log
+   (`operation_log`) and nothing else. A shown toast writes one Info line to the application
+   log (tracing), not to the operation log. No network call, no other record.
+6. The toast of a scheduled scan is §6.10. Not built: a settings command or UI for
    `notifications_enabled` (the key is read; nothing writes it yet).
-7. The NSIS installer sets the AppUserModelID on the Start menu shortcut; the MSI template does
-   not (design, "Shortcut"). Not tested on an installed build.
+7. Both Tauri installers set the AppUserModelID on the Start menu shortcut: NSIS
+   (`SetLnkAppUserModelId` in `nsis/includes/shortcuts.nsh`) and MSI (the WiX template
+   `bundle/windows/msi/main.wxs` sets `System.AppUserModel.ID`). Read in tauri-bundler, not
+   tested on an installed build. A development build, or any build with no registered
+   AppUserModelID, most likely gets a silent `Ok` from `Show`: no toast and no Warn row.
+
+### 6.10 Scheduled update scan (WP11, step 4 built: the in-app timer)
+
+Design: `docs/designs/hardening.md` section 3. Option (a) only: a timer in the app. The Task
+Scheduler option (b) is an open owner question and is not built.
+
+1. `services/schedule.rs`: `schedule::run(core, clock)` starts at app start-up (`lib.rs`) once
+   the core exists. It ticks at once and then every 15 minutes (`TICK`) and calls
+   `scan_if_due(core, now)`.
+2. Settings keys (§4.3): `update_scan` is `off` (default; also for a missing or unknown value),
+   `daily` or `weekly`. `update_scan_last` is the Unix time of the last scan attempt.
+   `update_scan_last_ids` is the sorted list of package ids of the last scan toast, joined
+   with `,`. A scan is due when there is no last time, the last time is in the future, or the
+   last time is at least one interval old (24 hours, 7 days).
+3. A scan does not run while `ActiveOperations` has an entry (`Busy`); it is due again at the
+   next tick. (The wait for the WP6 queue comes with WP6.) The check does not cover the gaps
+   between two packages of an `update_all` run; that is safe, because the scan only reads.
+4. A scan calls `list_updates()` only, which is `winget upgrade --include-unknown --source
+   winget --disable-interactivity` (`list_updates_args`; no package, no `--all`, no agreement
+   flag). It never starts an install, an update or a removal. The attempt time is saved after
+   every call, so an error waits for the next interval.
+5. Result:
+   - Updates, and the id set differs from `update_scan_last_ids`: one toast, "Updates
+     available" / "N updates are available." ("1 update is available."), only when
+     `notifications_enabled` is not `"false"`. The ids are saved only after the toast was
+     shown. The window focus is not asked.
+   - Updates, same set: no toast. No updates: no toast; the saved ids are cleared.
+   - `agreements_required`: one toast, "Update check needs you" / "Open Store to review an
+     agreement."; no flag is passed and no consent is stored (§6.6, "Read-only calls").
+   - Any other error (`winget_not_found`, `source_unavailable`, a time-out): no toast, one Warn
+     row "update scan failed: ..." in the operation log (no package, no operation).
+6. A failed scan toast writes the Warn row of §6.9 rule 5; the scan result stays.
+7. Commands: `get_update_scan` returns the mode text; `set_update_scan(mode)` saves it and
+   refuses any text other than `off`, `daily` and `weekly` with `invalid_config`. The UI
+   (`UpdateScanSetting.svelte`) is a select of the three modes.
+8. Not built: a scan while the app is closed (the Task Scheduler option), a scan toast that
+   opens the update page, and the wait for the WP6 queue.
 
 ---
 
@@ -1079,7 +1128,7 @@ behind the same traits, and a source picker in the UI. Not designed.
 first and defines the acceptance criteria.
 
 **WP11 — Hardening.** UAC elevation for the machine scope, toast notifications, background
-scheduled update scan (Task Scheduler), winget import/export. An install of a local MSIX file
+scheduled update scan (an in-app timer, §6.10; Task Scheduler is an opt-in after an owner decision), winget import/export. An install of a local MSIX file
 is deferred (§2.1, review action A9). No item has a flow in §6. Before code, WP11 must add a
 flow for each item, with criteria that a test can decide. The import flow must show how one
 user click for a list of packages satisfies hard rule 4.

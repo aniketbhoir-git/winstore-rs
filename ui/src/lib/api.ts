@@ -71,6 +71,9 @@ export const api = {
   getOperationLog: (packageId: string, limit?: number) =>
     call<OperationLogEntry[]>('get_operation_log', { packageId, limit }),
   checkUpdates: () => call<UpdateAvailable[]>('check_updates'),
+  /** The in-app update scan mode: `off`, `daily` or `weekly` (SPEC §6.10). */
+  getUpdateScan: () => call<string>('get_update_scan'),
+  setUpdateScan: (mode: string) => call<void>('set_update_scan', { mode }),
   updateAll: () => call<UpdatesSummaryEvent>('update_all'),
   openStorePage: (productId: string) => call<void>('open_store_page', { productId }),
   /** Exports the installed packages to winget's JSON format in the exports folder (SPEC 6.11). */

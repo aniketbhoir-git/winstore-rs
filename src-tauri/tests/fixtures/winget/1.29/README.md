@@ -7,6 +7,12 @@ Windows layout only.
 
 ## Provenance
 
+- `upgrade-no-source.txt` - hand-made, not recorded. The layout of `winget upgrade
+  --include-unknown --source winget` in 1.29: header `Name Id Version Available`, no `Source`
+  column (like the real `search --source winget` header, which has no Source column). CRLF,
+  column widths 27/27/13. Replace it with a recorded file when a hosted-runner
+  check exists.
+
 Real files: winget v1.29.380, GitHub `windows-latest` runner, run 45487151178, 2026-11-25.
 stdout was a pipe; the bytes are as recorded (CRLF, no spinner bytes appeared).
 

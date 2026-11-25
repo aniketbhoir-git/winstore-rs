@@ -685,6 +685,23 @@ async fn list_installed_with_no_match_is_empty() {
 }
 
 #[tokio::test]
+async fn list_updates_without_a_source_column_returns_the_rows() {
+    // `--source winget` output has no Source column (hand-made fixture, 1.29 layout).
+    let fx = Fx::new(&format!(
+        "file {}
+",
+        fixture("upgrade-no-source.txt")
+    ));
+    let ups = fx.cli.list_updates().await.unwrap();
+    assert_eq!(ups.len(), 2);
+    assert_eq!(ups[0].package_id, pkg("7zip.7zip"));
+    assert_eq!(ups[0].installed_version, "26.05");
+    assert_eq!(ups[0].latest_version, "26.06");
+    assert_eq!(ups[1].package_id, pkg("Microsoft.WindowsTerminal"));
+    assert!(ups.iter().all(|u| u.source == SourceKind::WingetCommunity));
+}
+
+#[tokio::test]
 async fn list_updates_parses_table_and_skips_unmatched_rows() {
     let script = "\
 out Name                  Id                         Version      Available    Source
@@ -707,7 +724,13 @@ exit 0
     assert!(!ups[0].is_auto);
     assert_eq!(
         fx.last_argv(),
-        ["upgrade", "--include-unknown", "--disable-interactivity"]
+        [
+            "upgrade",
+            "--include-unknown",
+            "--source",
+            "winget",
+            "--disable-interactivity"
+        ]
     );
 }
 
