@@ -2,6 +2,7 @@
   import { onMount } from 'svelte'
   import { api } from './lib/api'
   import { operations } from './lib/operations.svelte'
+  import AdminBanner from './components/AdminBanner.svelte'
   import ExportPanel from './components/ExportPanel.svelte'
   import AppDetail from './routes/AppDetail.svelte'
   import Search from './routes/Search.svelte'
@@ -24,6 +25,7 @@
     <h1>Store</h1>
     <small>Core v{version}</small>
   </header>
+  <AdminBanner />
   <div hidden={selected !== null}>
     <ExportPanel />
     <Search onopen={(id) => (selected = id)} />
