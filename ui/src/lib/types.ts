@@ -201,3 +201,26 @@ export interface ExportResult {
   file_name: string
   package_count: number
 }
+
+/** Why an import row can or cannot be ticked (SPEC 6.11). */
+export type ImportRowStatus = 'ready' | 'installed' | 'not_valid' | 'source_not_supported'
+
+export interface ImportRow {
+  package_id: string
+  version: string | null
+  source: string
+  status: ImportRowStatus
+}
+
+/** Result of `read_import_file` (SPEC 5.4, 6.11). */
+export interface ImportReview {
+  file_name: string
+  rows: ImportRow[]
+  installed_known: boolean
+}
+
+/** Event `store:import-dropped`: a file the core recorded from a drop. */
+export interface ImportDropped {
+  path: string
+  file_name: string
+}

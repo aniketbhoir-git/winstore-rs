@@ -5,16 +5,15 @@
 //! on disk and the call returns `winget_failed`. No agreement flag, no network call of our own.
 
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use directories::UserDirs;
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 
 use crate::error::{AppError, AppResult};
 use crate::executor::PackageExecutor;
-
-/// Largest export file accepted (the import limit of the design).
-pub const MAX_EXPORT_BYTES: u64 = 1024 * 1024;
+use crate::services::import::{parse_import, read_limited};
 
 /// What the UI shows after an export.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -22,26 +21,6 @@ pub struct ExportResult {
     pub path: String,
     pub file_name: String,
     pub package_count: usize,
-}
-
-// A strict subset of the schema in `microsoft/winget-cli` (`schemas/JSON/packages`): only what
-// the check needs. The import parser of plan step 6 replaces this check with its own.
-#[derive(Deserialize)]
-#[serde(rename_all = "PascalCase")]
-struct ExportFile {
-    sources: Vec<ExportSource>,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "PascalCase")]
-struct ExportSource {
-    packages: Vec<ExportPackage>,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "PascalCase")]
-struct ExportPackage {
-    package_identifier: String,
 }
 
 /// `Documents\Store\exports` (from `directories`).
@@ -75,23 +54,14 @@ fn date_from_unix(secs: u64) -> String {
     format!("{y:04}-{m:02}-{d:02}")
 }
 
-/// Counts the packages of an export file, or says why it is not one.
+/// Counts the packages of an export file with the import parser, or says why it is not one.
 fn check_export(bytes: &[u8]) -> Result<usize, String> {
-    if bytes.len() as u64 > MAX_EXPORT_BYTES {
-        return Err("export file is larger than 1 MiB".into());
-    }
-    let text = std::str::from_utf8(bytes).map_err(|_| "export file is not UTF-8".to_string())?;
-    let text = text.strip_prefix('\u{feff}').unwrap_or(text);
-    let file: ExportFile =
-        serde_json::from_str(text).map_err(|e| format!("export file is not valid: {e}"))?;
-    let mut count = 0;
-    for p in file.sources.iter().flat_map(|s| &s.packages) {
-        if p.package_identifier.trim().is_empty() {
-            return Err("export file holds an empty package id".into());
-        }
-        count += 1;
-    }
-    Ok(count)
+    parse_import(bytes)
+        .map(|p| p.packages.len())
+        .map_err(|e| match e {
+            AppError::InvalidConfig(m) => format!("export {m}"),
+            other => other.to_string(),
+        })
 }
 
 fn bad_file(reason: String) -> AppError {
@@ -107,14 +77,24 @@ pub async fn export_installed(
     dir: &Path,
     date: &str,
 ) -> AppResult<ExportResult> {
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.subsec_nanos())
-        .unwrap_or(0);
-    let temp =
-        std::env::temp_dir().join(format!("store-export-{}-{nanos}.json", std::process::id()));
-    let result = run(executor, &temp, dir, date).await;
-    let _ = std::fs::remove_file(&temp);
+    let temp = std::env::temp_dir().join(format!(
+        "store-export-{}-{}.json",
+        std::process::id(),
+        unique()
+    ));
+    export_with_temp(executor, &temp, dir, date).await
+}
+
+/// `export_installed` with the temp file chosen by the caller (a test seam). The temp file is
+/// removed on every path, success or failure.
+pub async fn export_with_temp(
+    executor: &dyn PackageExecutor,
+    temp: &Path,
+    dir: &Path,
+    date: &str,
+) -> AppResult<ExportResult> {
+    let result = run(executor, temp, dir, date).await;
+    let _ = std::fs::remove_file(temp);
     result
 }
 
@@ -125,23 +105,50 @@ async fn run(
     date: &str,
 ) -> AppResult<ExportResult> {
     executor.export_installed(temp).await?;
-    let bytes = match std::fs::read(temp) {
+    // `read_limited` checks `metadata().len()` before it reads.
+    let bytes = match read_limited(temp) {
         Ok(b) => b,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+        Err(AppError::Io(e)) if e.kind() == std::io::ErrorKind::NotFound => {
             return Err(bad_file("winget wrote no export file".into()))
         }
-        Err(e) => return Err(e.into()),
+        Err(AppError::InvalidConfig(m)) => return Err(bad_file(format!("export {m}"))),
+        Err(e) => return Err(e),
     };
     let package_count = check_export(&bytes).map_err(bad_file)?;
     std::fs::create_dir_all(dir)?;
     let file_name = format!("store-export-{date}.json");
     let target = dir.join(&file_name);
-    std::fs::write(&target, &bytes)?;
+    write_atomic(dir, &target, &bytes)?;
     Ok(ExportResult {
         path: target.display().to_string(),
         file_name,
         package_count,
     })
+}
+
+/// A number that differs on every call in this process, for temp file names.
+fn unique() -> u64 {
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| u64::from(d.subsec_nanos()))
+        .unwrap_or(0);
+    nanos ^ (NEXT.fetch_add(1, Ordering::Relaxed) << 32)
+}
+
+/// Writes `bytes` to a temp file in the target folder, then renames it over `target`, so a
+/// reader never sees a half-written file. The temp file does not end in `.json`.
+fn write_atomic(dir: &Path, target: &Path, bytes: &[u8]) -> AppResult<()> {
+    let tmp = dir.join(format!(
+        ".store-export-{}-{}.tmp",
+        std::process::id(),
+        unique()
+    ));
+    let result = std::fs::write(&tmp, bytes).and_then(|()| std::fs::rename(&tmp, target));
+    if result.is_err() {
+        let _ = std::fs::remove_file(&tmp);
+    }
+    result.map_err(AppError::Io)
 }
 
 #[cfg(test)]

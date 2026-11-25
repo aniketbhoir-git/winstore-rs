@@ -1,5 +1,6 @@
 <script lang="ts">
   import { api, toAppError } from '../lib/api'
+  import { requestImport } from '../lib/importRequest.svelte'
   import type { AppError, ExportResult } from '../lib/types'
 
   type View =
@@ -13,7 +14,7 @@
 
   // Never an agreement flag from an export (hardening design 4): the terms are accepted in a terminal.
   const AGREEMENT_TEXT =
-    'winget needs you to accept the terms of the winget source. Run `winget list` once in a terminal, read the terms, and accept them there.'
+    'winget needs you to accept the terms of the winget source. Run the command winget list once in a terminal, read the terms, and accept them there.'
 
   async function run() {
     view = { kind: 'running' }
@@ -41,11 +42,13 @@
   </button>
   <div aria-live="polite">
     {#if view.kind === 'done'}
+      {@const exported = view.result}
       <p>
         Saved {view.result.package_count}
         {view.result.package_count === 1 ? 'app' : 'apps'} to
         <code>{view.result.path}</code>
         <button onclick={openFolder}>Open folder</button>
+        <button onclick={() => requestImport(exported.path)}>Review this file</button>
       </p>
       {#if folderError}<p role="alert">The folder could not be opened.</p>{/if}
     {:else if view.kind === 'error'}

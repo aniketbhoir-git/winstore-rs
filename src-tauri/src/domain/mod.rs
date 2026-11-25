@@ -75,7 +75,8 @@ pub mod source;
 
 pub use install::{InstallRecord, InstallState, PackageVersion, UpdateAvailable};
 pub use package::{
-    InstallerMetadata, PackageDetail, PackageId, PackageSummary, PackagingKind, SourceKind,
+    validate_winget_id, InstallerMetadata, PackageDetail, PackageId, PackageSummary, PackagingKind,
+    SourceKind,
 };
 pub use progress::{LogLevel, Operation, OperationLogEntry, OperationStage, ProgressEvent};
 pub use source::{SourceCapabilities, SourceConfig};

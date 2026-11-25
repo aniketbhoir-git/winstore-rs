@@ -15,6 +15,8 @@ pub const EVENT_SEARCH_RESULTS: &str = "store:search-results";
 pub const EVENT_SEARCH_FAILED: &str = "store:search-failed";
 /// An install / update ended; carries the typed error on failure (`OperationFinishedEvent`).
 pub const EVENT_OPERATION_FINISHED: &str = "store:operation-finished";
+/// A file was dropped on the window and the core recorded it (`ImportDropped`).
+pub const EVENT_IMPORT_DROPPED: &str = "store:import-dropped";
 /// Summary at the end of `update_all` (`UpdatesSummaryEvent`).
 pub const EVENT_UPDATES_SUMMARY: &str = "store:updates-summary";
 
@@ -109,4 +111,12 @@ pub(crate) mod testing {
                 .collect()
         }
     }
+}
+
+/// Payload of `store:import-dropped`: the canonical path to give back to `read_import_file`,
+/// and the file name for display.
+#[derive(Debug, Clone, Serialize)]
+pub struct ImportDropped {
+    pub path: String,
+    pub file_name: String,
 }

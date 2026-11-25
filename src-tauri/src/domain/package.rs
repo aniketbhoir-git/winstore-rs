@@ -75,6 +75,44 @@ impl fmt::Display for PackageId {
     }
 }
 
+/// Checks a winget `PackageIdentifier` before any call uses it (hardening design §4).
+///
+/// The rules follow the `PackageIdentifier` pattern of the winget manifest schema
+/// (`schemas/JSON/manifests`, manifest version 1.10.0, the latest on `microsoft/winget-cli`
+/// master, read 2026-11-25; the 1.9.0 schema has the same line):
+/// a segment is 1 to 32 characters other than `.`, white space, a backslash,
+/// `/ : * ? " < > |` and the controls `U+0001` to `U+001F`; an id has two to eight segments
+/// and at most 128 characters. Two rules go beyond the schema: no leading `-` (the id could pass for a flag), and no `U+007F`.
+pub fn validate_winget_id(id: &str) -> AppResult<()> {
+    let bad = |why: &str| AppError::InvalidConfig(format!("not a valid package id ({why})"));
+    let len = id.chars().count();
+    if !(3..=128).contains(&len) {
+        return Err(bad("length"));
+    }
+    if id.starts_with('-') {
+        return Err(bad("leading dash"));
+    }
+    let forbidden = |c: char| {
+        c.is_whitespace()
+            || c.is_control()
+            || matches!(c, '\\' | '/' | ':' | '*' | '?' | '"' | '<' | '>' | '|')
+    };
+    let mut segments = 0;
+    for seg in id.split('.') {
+        segments += 1;
+        if seg.is_empty() || seg.chars().count() > 32 {
+            return Err(bad("segment"));
+        }
+        if seg.chars().any(forbidden) {
+            return Err(bad("character"));
+        }
+    }
+    if !(2..=8).contains(&segments) {
+        return Err(bad("segments"));
+    }
+    Ok(())
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PackageSummary {
     pub id: PackageId,
@@ -178,6 +216,62 @@ pub(crate) mod fixtures {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn winget_id_accepts_real_ids() {
+        for id in [
+            "VideoLAN.VLC",
+            "Microsoft.VisualStudioCode",
+            "Git.Git",
+            "7zip.7zip",
+        ] {
+            assert!(validate_winget_id(id).is_ok(), "{id}");
+        }
+        assert!(validate_winget_id(&["a"; 8].join(".")).is_ok());
+        assert!(validate_winget_id(&format!("{}.b", "a".repeat(32))).is_ok());
+    }
+
+    #[test]
+    fn winget_id_refuses_bad_ids() {
+        let long_segment = format!("a.{}", "b".repeat(33));
+        let nine = ["a"; 9].join(".");
+        let too_long = format!(
+            "{}.{}.{}.{}.b",
+            "a".repeat(32),
+            "a".repeat(32),
+            "a".repeat(32),
+            "a".repeat(32)
+        );
+        assert!(too_long.chars().count() > 128);
+        for id in [
+            "",
+            "VLC",
+            "-x.y",
+            "--accept-package-agreements",
+            "a b.c",
+            "a.b\n",
+            "a.b\u{7f}",
+            "a..b",
+            ".a.b",
+            "a.b.",
+            "a.b/c",
+            "a.b\\c",
+            "a:b.c",
+            "a.b*",
+            "a.\"b\".c",
+            "a.<b>",
+            "a.b|c",
+            "a.b?",
+            long_segment.as_str(),
+            nine.as_str(),
+            too_long.as_str(),
+        ] {
+            assert!(
+                matches!(validate_winget_id(id), Err(AppError::InvalidConfig(_))),
+                "{id:?}"
+            );
+        }
+    }
 
     #[test]
     fn source_kind_round_trip() {
