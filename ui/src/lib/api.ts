@@ -3,6 +3,7 @@ import { invoke } from '@tauri-apps/api/core'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import type {
   AppError,
+  ExportResult,
   InstallOptions,
   InstallStatus,
   OperationFinishedEvent,
@@ -69,6 +70,9 @@ export const api = {
   checkUpdates: () => call<UpdateAvailable[]>('check_updates'),
   updateAll: () => call<UpdatesSummaryEvent>('update_all'),
   openStorePage: (productId: string) => call<void>('open_store_page', { productId }),
+  /** Exports the installed packages to winget's JSON format in the exports folder (SPEC 6.11). */
+  exportPackages: () => call<ExportResult>('export_packages'),
+  openExportsFolder: () => call<void>('open_exports_folder'),
   startServer: (port: number) => call<void>('start_server', { port }),
 }
 

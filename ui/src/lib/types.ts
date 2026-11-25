@@ -194,3 +194,10 @@ export interface OperationLogEntry {
   message: string
   detail: string | null
 }
+
+/** Result of `export_packages` (SPEC §5.4, §6.11). */
+export interface ExportResult {
+  path: string
+  file_name: string
+  package_count: number
+}

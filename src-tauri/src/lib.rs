@@ -45,6 +45,8 @@ pub fn run() {
             commands::open_store_page,
             commands::open_agreement_link,
             commands::start_server,
+            commands::export_packages,
+            commands::open_exports_folder,
         ])
         .run(tauri::generate_context!());
 

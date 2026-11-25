@@ -15,6 +15,8 @@
 //! `sleep MS`     sleep
 //! `child MS`     start a grandchild that sleeps MS; its process id goes to
 //!                `FAKE_WINGET_CHILD_PID` (a process-tree test)
+//! `outfile PATH` copy the file at PATH to the path after `-o` in the arguments (what
+//!                `winget export -o <file>` writes); no `-o` is a panic
 //! `exit CODE`    exit with CODE (decimal or 0x hex; u32 HRESULTs allowed)
 //! ```
 //!
@@ -117,6 +119,13 @@ fn main() {
                 let mut o = stdout.lock();
                 o.write_all(&bytes).unwrap();
                 o.flush().unwrap();
+            }
+            "outfile" => {
+                let at = args
+                    .iter()
+                    .position(|a| a == "-o")
+                    .expect("outfile directive needs -o");
+                std::fs::copy(rest.trim(), &args[at + 1]).expect("outfile copy");
             }
             "err" => {
                 let mut e = stderr.lock();
