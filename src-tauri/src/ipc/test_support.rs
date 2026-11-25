@@ -86,6 +86,8 @@ pub(crate) struct FakeExec {
     pub list_fails: AtomicBool,
     /// How often `list_installed` was called.
     pub list_calls: AtomicU32,
+    /// How often `list_installed_one` was called.
+    pub list_one_calls: AtomicU32,
     /// The requests that `install` and `remove` received, in order.
     pub install_requests: Mutex<Vec<InstallRequest>>,
     pub remove_requests: Mutex<Vec<RemoveRequest>>,
@@ -218,6 +220,21 @@ impl PackageExecutor for FakeExec {
             return Box::pin(async { Err(AppError::DeploymentFailed("list failed".into())) });
         }
         let rows = self.installed.lock().unwrap().clone();
+        Box::pin(async move { Ok(rows) })
+    }
+    fn list_installed_one<'a>(&'a self, id: &'a str) -> ExecFuture<'a, Vec<InstalledPackage>> {
+        self.list_one_calls.fetch_add(1, Ordering::SeqCst);
+        if self.list_fails.load(Ordering::SeqCst) {
+            return Box::pin(async { Err(AppError::DeploymentFailed("list failed".into())) });
+        }
+        let rows: Vec<_> = self
+            .installed
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|r| r.id.eq_ignore_ascii_case(id))
+            .cloned()
+            .collect();
         Box::pin(async move { Ok(rows) })
     }
     fn list_updates<'a>(&'a self) -> ExecFuture<'a, Vec<UpdateAvailable>> {

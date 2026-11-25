@@ -154,7 +154,10 @@ class Operations {
   /** Attaches to an operation reported by `get_install_status` (for example after a reload). */
   adopt(id: PackageId, active: ActiveOperation) {
     const cur = this.byPackage[id]
-    if (cur && cur.operationId === active.operation_id) return
+    if (cur && cur.operationId === active.operation_id) {
+      if (active.cancel_failed === true) cur.cancelFailed = true
+      return
+    }
     this.byPackage[id] = {
       operationId: active.operation_id,
       operation: active.operation,
@@ -164,7 +167,7 @@ class Operations {
       message: 'Running',
       finished: false,
       error: null,
-      cancelFailed: false,
+      cancelFailed: active.cancel_failed === true,
       agreement: null,
     }
   }

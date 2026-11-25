@@ -41,6 +41,19 @@ describe('InstallButton', () => {
     operations.lines = {}
   })
 
+  it('keeps Cancel disabled until the start_install reply brings the operation id', async () => {
+    let reply: (v: unknown) => void = () => {}
+    const pending = new Promise((r) => (reply = r))
+    mockBackend({ start_install: () => pending, cancel_install: () => undefined })
+    mountButton()
+    await fireEvent.click(screen.getByRole('button', { name: 'Install' }))
+    const cancel = (await screen.findByRole('button', { name: 'Cancel' })) as HTMLButtonElement
+    expect(operations.get(pkg.id)?.operationId).toBeFalsy()
+    expect(cancel.disabled).toBe(true)
+    reply({ operation_id: 'op-late' })
+    await waitFor(() => expect(cancel.disabled).toBe(false))
+  })
+
   it('calls start_install and takes the operation id from the reply', async () => {
     const calls = mockBackend({
       start_install: () => ({ operation_id: 'op-from-reply' }),

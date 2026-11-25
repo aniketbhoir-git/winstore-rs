@@ -111,6 +111,8 @@ pub trait PackageExecutor: Send + Sync {
         request: &'a RemoveRequest,
     ) -> ExecFuture<'a, OperationHandle>;
     fn list_installed<'a>(&'a self) -> ExecFuture<'a, Vec<InstalledPackage>>;
+    /// `winget list` narrowed to one native package id (30 s limit); the full list is for the Library.
+    fn list_installed_one<'a>(&'a self, id: &'a str) -> ExecFuture<'a, Vec<InstalledPackage>>;
     fn list_updates<'a>(&'a self) -> ExecFuture<'a, Vec<UpdateAvailable>>;
     fn update<'a>(&'a self, package: &'a PackageId) -> ExecFuture<'a, OperationHandle>;
     fn pin<'a>(&'a self, package: &'a PackageId) -> ExecFuture<'a, ()>;
