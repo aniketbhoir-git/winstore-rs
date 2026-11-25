@@ -70,11 +70,6 @@ pub fn status_from(check: &dyn ElevationCheck) -> AppStatus {
     }
 }
 
-#[tauri::command]
-pub fn app_status() -> AppStatus {
-    status_from(&WindowsElevation)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

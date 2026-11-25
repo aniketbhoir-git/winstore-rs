@@ -47,6 +47,8 @@ async function call<T>(cmd: string, args?: Record<string, unknown>): Promise<T> 
 
 export const api = {
   appVersion: () => call<string>('app_version'),
+  /** `elevated` is true when Store itself runs as administrator (SPEC §6.8). */
+  appStatus: () => call<{ elevated: boolean }>('app_status'),
   searchSources: (searchId: string, query: SearchQuery) =>
     call<PackageSummary[]>('search_sources', { searchId, query }),
   getAppDetail: (packageId: string) => call<PackageDetail>('get_app_detail', { packageId }),

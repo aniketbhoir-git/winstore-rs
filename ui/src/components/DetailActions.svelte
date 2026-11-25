@@ -20,6 +20,8 @@
 
   // '' = latest.
   let version = $state('')
+  // '' = Default: no scope is sent and winget decides.
+  let scope = $state<'' | 'user' | 'machine'>('')
 
   const op = $derived(operations.get(pkg.id))
   const running = $derived(!!op && !op.finished)
@@ -37,7 +39,8 @@
   const verb = $derived(op?.operation === 'remove' ? 'Uninstalling' : 'Installing')
 
   function install() {
-    void operations.install(pkg.id, version ? { version } : undefined)
+    const options = { ...(version ? { version } : {}), ...(scope ? { scope } : {}) }
+    void operations.install(pkg.id, Object.keys(options).length ? options : undefined)
   }
 </script>
 
@@ -75,6 +78,14 @@
             </select>
           </label>
         {/if}
+        <label>
+          <span class="sr">Install scope</span>
+          <select bind:value={scope}>
+            <option value="">Default</option>
+            <option value="user">Only for me</option>
+            <option value="machine">For all users</option>
+          </select>
+        </label>
         <button onclick={install}>{ledger === 'failed' ? 'Try again' : 'Install'}</button>
       {/if}
     </div>

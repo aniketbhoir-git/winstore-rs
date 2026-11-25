@@ -343,6 +343,13 @@ pub fn app_version() -> &'static str {
     env!("CARGO_PKG_VERSION")
 }
 
+/// SPEC §6.8: whether Store itself runs as administrator.
+#[tauri::command]
+pub fn app_status() -> crate::platform::windows::AppStatus {
+    use crate::platform::windows::{status_from, WindowsElevation};
+    status_from(&WindowsElevation)
+}
+
 #[tauri::command]
 pub async fn search_sources(
     app: AppHandle,
