@@ -49,6 +49,9 @@ pub struct OperationStarted {
 pub struct ActiveOperation {
     pub operation_id: String,
     pub operation: Operation,
+    /// The executor reported `cancel_failed`: the installer tree cannot be stopped. A reloaded
+    /// view reads this flag, because the event is sent once.
+    pub cancel_failed: bool,
 }
 
 /// Operations running in this process, by package. Lets a reloaded view find (and cancel)
@@ -67,8 +70,18 @@ impl ActiveOperations {
             ActiveOperation {
                 operation_id: operation_id.to_string(),
                 operation,
+                cancel_failed: false,
             },
         );
+    }
+
+    /// Remembers that cancel failed, only while the entry still belongs to `operation_id`.
+    fn mark_cancel_failed(&self, id: &PackageId, operation_id: &str) {
+        if let Some(a) = self.lock().get_mut(id) {
+            if a.operation_id == operation_id {
+                a.cancel_failed = true;
+            }
+        }
     }
 
     /// Removes the entry only while it still belongs to `operation_id`.
@@ -369,6 +382,9 @@ pub(crate) async fn drive(
     target: Option<String>,
 ) -> AppResult<()> {
     while let Some(ev) = handle.events.recv().await {
+        if ev.cancel_failed {
+            core.active.mark_cancel_failed(id, &handle.operation_id);
+        }
         events::emit_progress(sink.as_ref(), &ev);
     }
     let mut result = match handle.outcome.await {

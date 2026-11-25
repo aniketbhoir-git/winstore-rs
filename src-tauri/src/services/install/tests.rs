@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use super::*;
 use crate::db::repo::{installs, operation_log};
-use crate::domain::{InstallRecord, InstallState, OperationStage, SourceKind};
+use crate::domain::{InstallRecord, InstallState, OperationStage, ProgressEvent, SourceKind};
 use crate::executor::{InstallRequest, PackageExecutor, VerifiedConsent};
 use crate::ipc::events::testing::RecordingSink;
 use crate::ipc::events::EVENT_OPERATION_FINISHED;
@@ -72,6 +72,7 @@ async fn running_install_is_reported_then_cancel_cleans_up() {
         Some(ActiveOperation {
             operation_id: started.operation_id.clone(),
             operation: Operation::Install,
+            cancel_failed: false,
         })
     );
 
@@ -658,6 +659,61 @@ async fn failed_cancel_then_the_real_outcome_settles_the_ledger() {
     assert_eq!(rec.state, InstallState::Installed);
     assert_eq!(rec.installed_version.as_deref(), Some("1.2.3"));
     assert_eq!(rec.target_version, None);
+    assert!(status(&core, &id()).await.unwrap().active.is_none());
+}
+
+#[tokio::test]
+async fn a_cancel_failed_event_stays_in_the_status_for_a_reload() {
+    let exec = Arc::new(FakeExec::holding());
+    let (core, _pool, sink) = setup(exec.clone()).await;
+    let started = start_install(&core, sink_of(&sink), id(), InstallRequest::default())
+        .await
+        .unwrap();
+    assert!(
+        !status(&core, &id())
+            .await
+            .unwrap()
+            .active
+            .unwrap()
+            .cancel_failed
+    );
+
+    let tx = exec.held.lock().unwrap()[0].3.clone();
+    let mut ev = ProgressEvent::new(
+        started.operation_id.as_str(),
+        id(),
+        Operation::Install,
+        OperationStage::Downloading,
+        0.3,
+        "cancel failed",
+    );
+    ev.cancel_failed = true;
+    tx.send(ev).await.unwrap();
+    for _ in 0..100 {
+        if status(&core, &id())
+            .await
+            .unwrap()
+            .active
+            .unwrap()
+            .cancel_failed
+        {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    assert!(
+        status(&core, &id())
+            .await
+            .unwrap()
+            .active
+            .unwrap()
+            .cancel_failed
+    );
+
+    // The test's sender clone keeps the event channel open; drop it before the end.
+    drop(tx);
+    exec.finish_held(&started.operation_id, OperationStage::Done, Ok(()));
+    finished(&sink, 1).await;
     assert!(status(&core, &id()).await.unwrap().active.is_none());
 }
 
