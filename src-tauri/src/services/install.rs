@@ -409,6 +409,7 @@ pub(crate) async fn drive(
                 let urls = agreements.iter().filter_map(|a| a.url.clone()).collect();
                 *consent_token = Some(core.consent.issue(
                     id,
+                    op,
                     *source_agreements,
                     version.clone(),
                     winget_source.as_deref().unwrap_or_default(),

@@ -13,10 +13,7 @@
 //! something other than `agreements_required`, any start with no consent (a new attempt), or
 //! `CHALLENGE_TTL`.
 
-use std::collections::hash_map::RandomState;
 use std::collections::HashMap;
-use std::hash::{BuildHasher, Hasher};
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
@@ -48,6 +45,8 @@ enum Kind {
 #[derive(Debug, Clone)]
 struct Challenge {
     token: String,
+    /// The command that raised the challenge: a token of an uninstall cannot start an install.
+    op: Operation,
     kind: Kind,
     version: Option<String>,
     winget_source: String,
@@ -60,7 +59,6 @@ struct Challenge {
 #[derive(Debug, Default)]
 pub struct ConsentLedger {
     open: Mutex<HashMap<PackageId, Vec<Challenge>>>,
-    seq: AtomicU64,
 }
 
 impl ConsentLedger {
@@ -68,21 +66,11 @@ impl ConsentLedger {
         self.open.lock().unwrap_or_else(|e| e.into_inner())
     }
 
+    /// 128 random bits from the operating system's CSPRNG, as 32 hex characters.
     fn token(&self) -> String {
-        // Two OS-seeded hashers over a counter and the clock: 128 bits that a page cannot
-        // guess. (The trust boundary of SPEC §6.6 does not rest on secrecy alone.)
-        let n = self.seq.fetch_add(1, Ordering::Relaxed);
-        let t = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_or(0, |d| d.as_nanos());
-        let mut out = String::with_capacity(32);
-        for _ in 0..2 {
-            let mut h = RandomState::new().build_hasher();
-            h.write_u64(n);
-            h.write_u128(t);
-            out.push_str(&format!("{:016x}", h.finish()));
-        }
-        out
+        let mut bytes = [0u8; 16];
+        getrandom::fill(&mut bytes).expect("the operating system has no random source");
+        bytes.iter().map(|b| format!("{b:02x}")).collect()
     }
 
     /// Records that winget asked for an agreement and returns the token for the dialog. A new
@@ -90,6 +78,7 @@ impl ConsentLedger {
     pub fn issue(
         &self,
         id: &PackageId,
+        op: Operation,
         source_kind: bool,
         version: Option<String>,
         winget_source: &str,
@@ -106,6 +95,7 @@ impl ConsentLedger {
         list.retain(|c| c.kind != kind && c.issued.elapsed() < CHALLENGE_TTL);
         list.push(Challenge {
             token: token.clone(),
+            op,
             kind,
             version,
             winget_source: winget_source.to_string(),
@@ -184,6 +174,7 @@ impl ConsentLedger {
         let fits = |kind: Kind| {
             live.iter().any(|c| {
                 c.kind == kind
+                    && c.op == op
                     && c.version.as_deref() == version
                     && c.winget_source == winget_source
                     && consent.tokens.contains(&c.token)
@@ -219,7 +210,14 @@ mod tests {
     fn consent_is_bound_to_package_version_source_and_kind() {
         let l = ConsentLedger::default();
         let a = pid("A.A");
-        let t = l.issue(&a, false, Some("1.0".into()), "winget", vec![]);
+        let t = l.issue(
+            &a,
+            Operation::Install,
+            false,
+            Some("1.0".into()),
+            "winget",
+            vec![],
+        );
         let c = consent(&["package"], &[&t]);
         let ok = l
             .verify(&a, Operation::Install, Some("1.0"), "winget", Some(&c))
@@ -245,7 +243,7 @@ mod tests {
     fn no_token_or_a_made_up_token_is_refused() {
         let l = ConsentLedger::default();
         let a = pid("A.A");
-        l.issue(&a, true, None, "winget", vec![]);
+        l.issue(&a, Operation::Install, true, None, "winget", vec![]);
         for tokens in [&[][..], &["deadbeef"][..]] {
             let c = consent(&["source"], tokens);
             assert!(l
@@ -258,7 +256,7 @@ mod tests {
     fn start_with_no_consent_ends_the_attempt() {
         let l = ConsentLedger::default();
         let a = pid("A.A");
-        let t = l.issue(&a, true, None, "winget", vec![]);
+        let t = l.issue(&a, Operation::Install, true, None, "winget", vec![]);
         assert_eq!(
             l.verify(&a, Operation::Install, None, "winget", None)
                 .unwrap(),
@@ -274,8 +272,22 @@ mod tests {
     fn two_kinds_travel_together_inside_one_attempt() {
         let l = ConsentLedger::default();
         let a = pid("A.A");
-        let ts = l.issue(&a, true, Some("1.0".into()), "msstore", vec![]);
-        let tp = l.issue(&a, false, Some("1.0".into()), "msstore", vec![]);
+        let ts = l.issue(
+            &a,
+            Operation::Install,
+            true,
+            Some("1.0".into()),
+            "msstore",
+            vec![],
+        );
+        let tp = l.issue(
+            &a,
+            Operation::Install,
+            false,
+            Some("1.0".into()),
+            "msstore",
+            vec![],
+        );
         let c = consent(&["source", "package"], &[&ts, &tp]);
         let v = l
             .verify(&a, Operation::Install, Some("1.0"), "msstore", Some(&c))
@@ -287,8 +299,8 @@ mod tests {
     fn uninstall_takes_the_source_kind_only_and_update_none() {
         let l = ConsentLedger::default();
         let a = pid("A.A");
-        let ts = l.issue(&a, true, None, "winget", vec![]);
-        let tp = l.issue(&a, false, None, "winget", vec![]);
+        let ts = l.issue(&a, Operation::Remove, true, None, "winget", vec![]);
+        let tp = l.issue(&a, Operation::Remove, false, None, "winget", vec![]);
         let c = consent(&["package"], &[&tp]);
         assert!(l
             .verify(&a, Operation::Remove, None, "winget", Some(&c))
@@ -306,7 +318,7 @@ mod tests {
     fn package_kind_needs_a_version_and_unknown_kinds_fail() {
         let l = ConsentLedger::default();
         let a = pid("A.A");
-        let t = l.issue(&a, false, None, "winget", vec![]);
+        let t = l.issue(&a, Operation::Install, false, None, "winget", vec![]);
         let c = consent(&["package"], &[&t]);
         assert!(l
             .verify(&a, Operation::Install, None, "winget", Some(&c))
@@ -323,6 +335,7 @@ mod tests {
         let a = pid("A.A");
         l.issue(
             &a,
+            Operation::Install,
             false,
             None,
             "winget",
@@ -336,11 +349,48 @@ mod tests {
     }
 
     #[test]
-    fn tokens_differ() {
+    fn tokens_differ_and_are_32_hex_chars() {
         let l = ConsentLedger::default();
-        let a = l.issue(&pid("A.A"), true, None, "winget", vec![]);
-        let b = l.issue(&pid("B.B"), true, None, "winget", vec![]);
+        let a = l.issue(
+            &pid("A.A"),
+            Operation::Install,
+            true,
+            None,
+            "winget",
+            vec![],
+        );
+        let b = l.issue(
+            &pid("B.B"),
+            Operation::Install,
+            true,
+            None,
+            "winget",
+            vec![],
+        );
         assert_ne!(a, b);
-        assert_eq!(a.len(), 32);
+        for t in [&a, &b] {
+            assert_eq!(t.len(), 32);
+            assert!(t.chars().all(|c| c.is_ascii_hexdigit()));
+        }
+    }
+
+    #[test]
+    fn an_uninstall_token_cannot_start_an_install() {
+        let l = ConsentLedger::default();
+        let a = pid("A.A");
+        let t = l.issue(&a, Operation::Remove, true, None, "winget", vec![]);
+        let c = consent(&["source"], &[&t]);
+        assert!(l
+            .verify(&a, Operation::Install, None, "winget", Some(&c))
+            .is_err());
+        assert!(l
+            .verify(&a, Operation::Remove, None, "winget", Some(&c))
+            .is_ok());
+        // and the other way round
+        let t = l.issue(&a, Operation::Install, true, None, "winget", vec![]);
+        let c = consent(&["source"], &[&t]);
+        assert!(l
+            .verify(&a, Operation::Remove, None, "winget", Some(&c))
+            .is_err());
     }
 }

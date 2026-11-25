@@ -18,6 +18,7 @@ use crate::domain::{
     Operation, OperationLogEntry, PackageDetail, PackageId, PackageSummary, UpdateAvailable,
 };
 use crate::error::{AppError, AppResult};
+use crate::executor::winget_parse::safe_https_url;
 use crate::executor::{InstallRequest, InstallScope};
 use crate::services::consent::Consent;
 pub use crate::services::install::OperationStarted;
@@ -185,7 +186,10 @@ pub async fn run_open_agreement_link(
             "this link does not belong to an agreement of this package".into(),
         ));
     }
-    open_in_browser(url)
+    // Defence in depth: only an https link goes to the browser, whatever the challenge holds.
+    let url = safe_https_url(url)
+        .ok_or_else(|| AppError::InvalidConfig("only an https link opens in the browser".into()))?;
+    open_in_browser(&url)
 }
 
 pub async fn run_cancel(state: &AppState, operation_id: &str) -> AppResult<()> {

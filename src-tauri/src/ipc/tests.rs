@@ -560,9 +560,34 @@ async fn a_link_that_no_challenge_showed_does_not_open() {
         "https://evil.example/",
         "file:///c:/windows/system32/calc.exe",
     ] {
-        let err = run_open_agreement_link(&state, "winget/Foo.Bar", url)
+        let err = run_open_agreement_link(&state, "winget_community/Foo.Bar", url)
             .await
             .unwrap_err();
         assert_eq!(err.code(), "invalid_config");
+    }
+}
+
+#[tokio::test]
+async fn a_stored_non_https_link_is_refused_before_the_browser() {
+    let (state, _) = state_with(false, false, exec_factory(FakeExec::default())).await;
+    let core = state.core().await.unwrap();
+    let id = PackageId::parse("winget_community/Foo.Bar")
+        .map(|(k, l)| PackageId::new(k, &l))
+        .unwrap();
+    for url in ["http://example.org/t", "file:///c:/x", "https://e.org/<b>"] {
+        core.consent.issue(
+            &id,
+            crate::domain::Operation::Install,
+            false,
+            None,
+            "winget",
+            vec![url.to_string()],
+        );
+        // The link is in a live challenge, yet it is not a safe https link.
+        assert!(core.consent.link_allowed(&id, url));
+        let err = run_open_agreement_link(&state, "winget_community/Foo.Bar", url)
+            .await
+            .unwrap_err();
+        assert_eq!(err.code(), "invalid_config", "{url}");
     }
 }

@@ -20,6 +20,7 @@ tauri-build = "2.7"
 
 [dependencies]
 tauri = "2.12"
+getrandom = "0.3"
 sqlx = { version = "0.8", features = ["runtime-tokio", "sqlite", "migrate"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "fs", "process", "io-util", "time"] }
 serde = { version = "1", features = ["derive"] }
