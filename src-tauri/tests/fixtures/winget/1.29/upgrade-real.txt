@@ -1,0 +1,7 @@
+Name                                                         Id                                 Version       Available
+---------------------------------------------------------------------------------------------------------------------------
+AWS Command Line Interface v2                                Amazon.AWSCLI                      2.40.3.0      2.42.2
+GitHub CLI                                                   GitHub.cli                         2.104.0       2.105.0
+Google Chrome                                                Google.Chrome                      157.0.8103.79 158.0.8127.89
+Windows Terminal                                             Microsoft.WindowsTerminal          1.23.20211.0  1.25.3131.0
+4 upgrades available.
