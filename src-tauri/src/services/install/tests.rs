@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use super::*;
 use crate::db::repo::{installs, operation_log};
-use crate::domain::{InstallRecord, InstallState, OperationStage, SourceKind};
+use crate::domain::{InstallRecord, InstallState, OperationStage, ProgressEvent, SourceKind};
 use crate::executor::{InstallRequest, PackageExecutor, VerifiedConsent};
 use crate::ipc::events::testing::RecordingSink;
 use crate::ipc::events::EVENT_OPERATION_FINISHED;
@@ -72,6 +72,7 @@ async fn running_install_is_reported_then_cancel_cleans_up() {
         Some(ActiveOperation {
             operation_id: started.operation_id.clone(),
             operation: Operation::Install,
+            cancel_failed: false,
         })
     );
 
@@ -661,6 +662,61 @@ async fn failed_cancel_then_the_real_outcome_settles_the_ledger() {
     assert!(status(&core, &id()).await.unwrap().active.is_none());
 }
 
+#[tokio::test]
+async fn a_cancel_failed_event_stays_in_the_status_for_a_reload() {
+    let exec = Arc::new(FakeExec::holding());
+    let (core, _pool, sink) = setup(exec.clone()).await;
+    let started = start_install(&core, sink_of(&sink), id(), InstallRequest::default())
+        .await
+        .unwrap();
+    assert!(
+        !status(&core, &id())
+            .await
+            .unwrap()
+            .active
+            .unwrap()
+            .cancel_failed
+    );
+
+    let tx = exec.held.lock().unwrap()[0].3.clone();
+    let mut ev = ProgressEvent::new(
+        started.operation_id.as_str(),
+        id(),
+        Operation::Install,
+        OperationStage::Downloading,
+        0.3,
+        "cancel failed",
+    );
+    ev.cancel_failed = true;
+    tx.send(ev).await.unwrap();
+    for _ in 0..100 {
+        if status(&core, &id())
+            .await
+            .unwrap()
+            .active
+            .unwrap()
+            .cancel_failed
+        {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    assert!(
+        status(&core, &id())
+            .await
+            .unwrap()
+            .active
+            .unwrap()
+            .cancel_failed
+    );
+
+    // The test's sender clone keeps the event channel open; drop it before the end.
+    drop(tx);
+    exec.finish_held(&started.operation_id, OperationStage::Done, Ok(()));
+    finished(&sink, 1).await;
+    assert!(status(&core, &id()).await.unwrap().active.is_none());
+}
+
 // Between the executor releasing its lock and the ledger update, `active` still blocks a
 // second operation: the package is only free once the ledger is settled. The test watches
 // `status().active` while the outcome is settled: whenever it reads empty, the ledger row
@@ -726,10 +782,22 @@ async fn install_records_the_version_from_winget_list() {
     // The id case differs on purpose; the catalog version is 1.2.3.
     *exec.installed.lock().unwrap() =
         vec![listed("other.app", "9.9"), listed("foo.bar", "1.2.3.4")];
+    let exec2 = exec.clone();
     let (pool, log) = install_ok(exec).await;
     let rec = ledger(&pool).await;
     assert_eq!(rec.state, InstallState::Installed);
     assert_eq!(rec.installed_version.as_deref(), Some("1.2.3.4"));
+    // The post-install call is the narrowed one; the full list is for the Library.
+    assert_eq!(
+        exec2
+            .list_one_calls
+            .load(std::sync::atomic::Ordering::SeqCst),
+        1
+    );
+    assert_eq!(
+        exec2.list_calls.load(std::sync::atomic::Ordering::SeqCst),
+        0
+    );
     assert!(log
         .iter()
         .any(|e| e.level == LogLevel::Warn && e.message.contains("differs")));
@@ -789,6 +857,11 @@ async fn failed_install_does_not_read_winget_list() {
     assert_eq!(finished(&sink, 1).await["ok"], false);
     assert_eq!(ledger(&pool).await.installed_version, None);
     assert_eq!(exec.list_calls.load(std::sync::atomic::Ordering::SeqCst), 0);
+    assert_eq!(
+        exec.list_one_calls
+            .load(std::sync::atomic::Ordering::SeqCst),
+        0
+    );
 }
 
 #[tokio::test]

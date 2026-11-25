@@ -168,6 +168,8 @@ export type InstallState =
 export interface ActiveOperation {
   operation_id: string
   operation: OperationKind
+  /** Cancel failed once: the installer tree continues. Restores the disabled Cancel after a reload. */
+  cancel_failed: boolean
 }
 
 /** Ledger state for one package plus the operation running for it, if any. */

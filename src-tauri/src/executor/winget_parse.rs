@@ -464,6 +464,7 @@ fn to_bytes(num: &str, unit: &str) -> Option<f64> {
 // ---------------------------------------------------------------------------------------------
 
 pub const EXIT_CTRL_SIGNAL: u32 = 0x8A15_0005;
+pub const EXIT_NO_MANIFEST_FOUND: u32 = 0x8A15_0017;
 pub const EXIT_NO_APPLICABLE_INSTALLER: u32 = 0x8A15_0010;
 pub const EXIT_HASH_MISMATCH: u32 = 0x8A15_0011;
 pub const EXIT_NO_APPLICATIONS_FOUND: u32 = 0x8A15_0014;
@@ -495,6 +496,15 @@ pub fn map_exit(
         0 => return ExitOutcome::Success,
         EXIT_UPDATE_NOT_APPLICABLE => return ExitOutcome::NoOp,
         EXIT_NO_APPLICATIONS_FOUND => AppError::PackageNotFound(package.to_string()),
+        // The requested version does not exist (spike Q2, SPEC §6.6 step 4).
+        EXIT_NO_MANIFEST_FOUND => {
+            let line = stderr.lines().find(|l| !l.trim().is_empty()).unwrap_or("");
+            AppError::PackageNotFound(if line.is_empty() {
+                format!("{package}: no manifest for the requested version")
+            } else {
+                line.trim().to_string()
+            })
+        }
         EXIT_NO_APPLICABLE_INSTALLER => {
             AppError::Unsupported("no installer for this system".to_string())
         }
@@ -1204,6 +1214,12 @@ mod tests {
             ExitOutcome::Failure(AppError::WingetFailed { code, stderr }) => {
                 assert_eq!(code as u32, 0x8A15_0011);
                 assert!(stderr.contains("hash"));
+            }
+            other => panic!("{other:?}"),
+        }
+        match f(0x8A15_0017) {
+            ExitOutcome::Failure(AppError::PackageNotFound(m)) => {
+                assert_eq!(m, "err")
             }
             other => panic!("{other:?}"),
         }

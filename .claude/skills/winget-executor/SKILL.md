@@ -123,7 +123,7 @@ Full table with verified/inferred marks: `references/winget-cli.md`. Exit codes 
 |---|---|---|
 | 0 | success | Done |
 | 0x8A150014 | NO_APPLICATIONS_FOUND | `PackageNotFound(id)` |
-| 0x8A150017 | NO_MANIFEST_FOUND (version not found) | not mapped yet; WP5 step 2 decides (spike Q2) |
+| 0x8A150017 | NO_MANIFEST_FOUND (version not found) | `PackageNotFound(<first stderr line>)`; the message names the version |
 | 0x8A150010 | NO_APPLICABLE_INSTALLER | `Unsupported("no installer for this system")` |
 | 0x8A150011 | INSTALLER_HASH_MISMATCH | `WingetFailed` (security; never offer an override) |
 | 0x8A15002B | UPDATE_NOT_APPLICABLE | Done, no-op |
