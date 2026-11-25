@@ -1,7 +1,9 @@
 // L2: the scope choice reaches start_install; the banner follows app_status.
+import { emit } from '@tauri-apps/api/event'
 import { fireEvent, render, screen, waitFor } from '@testing-library/svelte'
 import { beforeAll, describe, expect, it } from 'vitest'
 import type { PackageSummary } from '../lib/types'
+import { errorText } from '../lib/errors'
 import { operations } from '../lib/operations.svelte'
 import { eventProgress, installBridge, mockBackend } from '../test/ipc'
 import AdminBanner from './AdminBanner.svelte'
@@ -66,5 +68,32 @@ describe('administrator banner', () => {
     render(AdminBanner)
     await waitFor(() => expect(calls).toHaveLength(1))
     expect(screen.queryByText(BANNER)).toBeNull()
+  })
+})
+
+describe('hardening texts', () => {
+  beforeAll(() => installBridge())
+
+  it('elevation_required shows the text of design section 1 rule 6', () => {
+    expect(
+      errorText({ code: 'elevation_required', message: 'raw', detail: null, retryable: false }),
+    ).toBe(
+      "This app needs administrator rights to install. Windows did not give them. Try again and accept the Windows prompt, or choose 'Only for me' if the app supports it.",
+    )
+  })
+
+  it('cancel_failed shows the text of the elevated installer case', async () => {
+    operations.byPackage = {}
+    const calls = mockBackend({ start_install: () => ({ operation_id: 'op-1' }) })
+    render(DetailActions, { pkg, versions: [], status: null })
+    await fireEvent.click(screen.getByRole('button', { name: 'Install' }))
+    await waitFor(() => expect(calls).toHaveLength(1))
+    await emit('store:progress', eventProgress)
+    const cancel = (await screen.findByRole('button', { name: 'Cancel' })) as HTMLButtonElement
+    await waitFor(() => expect(cancel.disabled).toBe(false))
+    await emit('store:progress', { ...eventProgress, cancel_failed: true })
+    expect(
+      await screen.findByText('The installer runs with administrator rights. Store cannot stop it.'),
+    ).toBeTruthy()
   })
 })
