@@ -81,15 +81,17 @@
             </select>
           </label>
         {/if}
-        <label>
-          <span class="sr">Install scope</span>
-          <select bind:value={scope}>
-            <option value="">Default</option>
-            <option value="user">Only for me</option>
-            <option value="machine">For all users</option>
-          </select>
-        </label>
-        <span class="note scope-hint">winget asks for the scope and the installer decides.</span>
+        <div class="scope">
+          <label>
+            <span class="sr">Install scope</span>
+            <select bind:value={scope}>
+              <option value="">Default</option>
+              <option value="user">Only for me</option>
+              <option value="machine">For all users</option>
+            </select>
+          </label>
+          <span class="note scope-hint">winget asks for the scope and the installer decides.</span>
+        </div>
         <button onclick={install}>{ledger === 'failed' ? 'Try again' : 'Install'}</button>
       {/if}
     </div>
@@ -126,6 +128,10 @@
     display: flex;
     gap: 0.6rem;
     align-items: center;
+  }
+  .scope {
+    display: flex;
+    flex-direction: column;
   }
   .progress {
     align-items: flex-end;

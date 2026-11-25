@@ -47,7 +47,10 @@ elevation). `tier:any` issues are reserved for community contributors on cheaper
 - Requirement: all testing runs unattended, for contributors also. Run
   `powershell -File scripts/test.ps1` (L1 Rust + L2 UI; report in `src-tauri/target/test-report.md`).
   The real-winget test refuses to run off a GitHub-hosted runner; no other test may call
-  `WingetCli::connect`. Design: `docs/designs/unattended-testing.md`.
+  `WingetCli::connect`. Design: `docs/designs/unattended-testing.md`. F2 steps 5 (fork
+  approval setting) and 7 (follow-up issues) are open.
+- Known bug: search returns unrelated results (the winget.run service does; F1, #20, #16).
+  Catalog step 4 (wire the winget CLI source) fixes it; it waits for the owner.
 - Next: the "Review follow-ups" section of `docs/ISSUE-BACKLOG.md`.
 
 ## Design workflow — Elephant-Goldfish Model (EGM)
