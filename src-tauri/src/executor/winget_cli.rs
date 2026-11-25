@@ -235,8 +235,16 @@ pub fn export_args(path: &Path) -> Vec<String> {
     a
 }
 
+/// `winget upgrade` for the `winget` source only (hardening design §3). Read-only; no package,
+/// no `--all`, no agreement flag.
 pub fn list_updates_args() -> Vec<String> {
-    s(&["upgrade", "--include-unknown", "--disable-interactivity"])
+    s(&[
+        "upgrade",
+        "--include-unknown",
+        "--source",
+        "winget",
+        "--disable-interactivity",
+    ])
 }
 
 /// `winget search` for the community source. The text is one argument after `--query`, so a

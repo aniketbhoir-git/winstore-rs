@@ -5,6 +5,7 @@
   import AdminBanner from './components/AdminBanner.svelte'
   import ExportPanel from './components/ExportPanel.svelte'
   import ImportPanel from './components/ImportPanel.svelte'
+  import UpdateScanSetting from './components/UpdateScanSetting.svelte'
   import AppDetail from './routes/AppDetail.svelte'
   import Search from './routes/Search.svelte'
 
@@ -29,6 +30,7 @@
   <AdminBanner />
   <div hidden={selected !== null}>
     <ExportPanel />
+    <UpdateScanSetting />
     <ImportPanel />
     <Search onopen={(id) => (selected = id)} />
   </div>

@@ -362,9 +362,14 @@ fn violations(test_code: &str, file: &str) -> Vec<&'static str> {
         let pos = from + at;
         from = pos + 1;
         let body = enclosing_fn(test_code, pos);
-        if !["with_core(", "state_with(", "Core::new("]
-            .iter()
-            .any(|b| body.contains(b))
+        if ![
+            "with_core(",
+            "state_with(",
+            "state_with_toasts(",
+            "Core::new(",
+        ]
+        .iter()
+        .any(|b| body.contains(b))
         {
             found.push("core without a fake executor");
             break;

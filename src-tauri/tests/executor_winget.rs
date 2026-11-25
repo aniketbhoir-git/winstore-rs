@@ -707,7 +707,13 @@ exit 0
     assert!(!ups[0].is_auto);
     assert_eq!(
         fx.last_argv(),
-        ["upgrade", "--include-unknown", "--disable-interactivity"]
+        [
+            "upgrade",
+            "--include-unknown",
+            "--source",
+            "winget",
+            "--disable-interactivity"
+        ]
     );
 }
 

@@ -140,9 +140,12 @@ is behind a trait, so a change to (a) touches one file (see "Decisions" 3).
      bundle identifier. **Read on 2026-11-25 (tauri-bundler, branch `dev`):** the NSIS template
      sets the AppUserModelID of its Start menu and desktop shortcuts to `${BUNDLEID}` (macro
      `SetLnkAppUserModelId`, `nsis/includes/shortcuts.nsh`), so the NSIS installer is the path
-     that shows toasts. The MSI (WiX) template `msi/main.wxs` sets no AppUserModelID on its
-     shortcuts; an MSI install is expected to fail the toast call, which ends as the Warn row
-     of rule 7. Not tested on an installed build.
+     that shows toasts. **Corrected on 2026-11-25 (review of PR #54):** the MSI (WiX) template
+     `bundle/windows/msi/main.wxs` also sets `System.AppUserModel.ID` on its Start menu
+     shortcut, so both installers carry the AppUserModelID. Not tested on an installed build.
+     A development build, or any build with no registered AppUserModelID, most likely gets a
+     silent `Ok` from `Show` and no toast appears; the call does not fail, so no Warn row
+     comes either.
    - **`windows` features.** Add `UI_Notifications` and `Data_Xml_Dom` to the `windows`
      dependency in `src-tauri/Cargo.toml`. No other crate.
    - **Activation.** The notifier registers an in-process `Activated` handler on each toast.
@@ -164,8 +167,10 @@ is behind a trait, so a change to (a) touches one file (see "Decisions" 3).
    one Info row in the trace log.
 7. When the toast call fails, the app writes one Warn row to the trace log and continues. A
    failed toast never fails a scan or an operation. A development build (`cargo tauri dev`)
-   has no installed shortcut, so its toasts can fail or show the name and icon of another
-   program; the Warn row is the expected result there.
+   has no installed shortcut, so its toasts most likely end as a silent `Ok` from `Show` with
+   nothing on the screen, or show the name and icon of another program. A Warn row comes only
+   when the call itself returns an error. The call runs on a blocking thread, outside the
+   operation.
 
 ### 3. Scheduled update scan
 
@@ -366,7 +371,7 @@ L1 and L2). No test calls `WingetCli::connect` or runs `schtasks.exe`.
 | Cancel text | L2 | `ui/` Vitest | `cancel_failed` shows the text for an elevated installer. |
 | Toast XML | L1 | `platform/windows.rs` | A name with `<`, `&` and `"` is escaped. No image, link or action element. |
 | Toast on finish | L1 | `ipc/tests.rs`, `FakeExec`, `FakeNotifier`, `FakeWindowFocus` | Window not focused: one toast. Focused: none. Setting off: none. |
-| Scan timer | L1 | `tests/schedule.rs`, `tokio::time::pause` | Setting off: no scan. Due: one `check_updates`. Not due: none. An entry in `ActiveOperations` delays the scan to the next tick. |
+| Scan timer | L1 | `services/schedule/tests.rs`, a short real tick (`run_every`) and a clock that the test sets | Setting off: no scan. Due: one `check_updates`. Not due: none. An entry in `ActiveOperations` delays the scan to the next tick. |
 | Scan args | L1 | `winget_cli.rs` unit tests | `list_updates_args()` holds `--source winget` and no agreement flag. |
 | Scan result | L1 | same file | New set: one toast. Same set: none. Empty: none. `agreements_required`: the review toast, and no agreement flag in the argv file. Error: no toast, one Warn row. |
 | Scan never installs | L1 | same file | `FakeExec` records no install, update or uninstall call during a scan. |
@@ -392,9 +397,9 @@ Test support changes:
 - **Subprocess fake.** `tests/fixtures/fake_winget.rs` gets the directive `outfile PATH`. It
   copies the file `PATH` to the path that follows `-o` (or `--output`) in its own argument
   list, and panics when that argument is missing. Step 5 adds it.
-- **Paused time.** `tokio::time::pause` needs the `test-util` feature. Step 4 adds
-  `tokio = { version = "1", features = ["test-util"] }` to `[dev-dependencies]`, so the
-  feature is not in the shipped build.
+- **Time in the scan test.** `schedule::run_every` takes the tick length and the clock is a
+  closure, so the test uses a 20 ms tick and sets the time itself. A paused tokio clock was
+  tried and dropped: its jumps close the idle sqlx connection. No `test-util` feature.
 
 **Open checks (not L1 or L2).** These stay in "Hand-over from SPEC §8" of
 `docs/designs/unattended-testing.md`, label `needs-windows-test`:
@@ -454,7 +459,7 @@ Each choice of taste takes the option that is easiest to reverse.
 |---|---|
 | An EXE installer ignores `--scope`. The user picks "Only for me" and gets a machine install, or a UAC prompt. | The UI text says winget asks for the scope and the installer decides. The recorded version check (SPEC §6.7) still runs. |
 | The code of a refused UAC prompt is not known. | It ends as `winget_failed` until a recorded fixture proves the code. |
-| A toast fails in a build with no AppUserModelID. | Warn row; the scan and operation results stay in the app. |
+| A toast fails, or shows nothing, in a build with no AppUserModelID. | A failed call writes a Warn row; a silent `Ok` shows nothing. The scan and operation results stay in the app. |
 | The in-app timer does not scan while the app is closed. | Documented; step 8 if the owner wants it. |
 | An import file names many packages; a long queue. | 500-package limit; one install at a time; Cancel clears the rest. |
 | The user starts Store as administrator and gets no UAC prompt. | Banner. |
@@ -466,9 +471,9 @@ Each choice of taste takes the option that is easiest to reverse.
   `1223`). Record it in Windows Sandbox before a mapping is added.
 - Toast activation (click) for an app with no package identity: it needs the AppUserModelID
   `app.store.desktop` on the Start menu shortcut. Whether the Tauri NSIS and MSI templates
-  set it was not checked. Activation after the app has closed is not designed. Check with
-  the installed build.
-- That an MSI install shows no toast (the WiX template sets no AppUserModelID). Read, not run.
+  set it: both do (NSIS `SetLnkAppUserModelId`, WiX `System.AppUserModel.ID`; read, not run).
+  Activation after the app has closed is not designed. Check with the installed build.
+- That a development build shows no toast: expected, a silent `Ok` from `Show`. Read, not run.
 - Whether `winget export` asks for a source agreement for the `winget` winget source. The
   real-winget check on a hosted runner records it with the fixture.
 
@@ -483,7 +488,7 @@ focused test command of the step.
 | 1 | **Elevation core.** `ElevationCheck` in `platform/windows.rs` (token read). Scope flag tests. Status reports an elevated app. `ElevationRequired` message. The exit-code map is built; this step adds only the ledger-state test. SPEC §6.8. | `cd src-tauri && cargo test --lib -- executor platform` and `cargo test --test install_loop` |
 | 2 | **Scope UI.** Scope choice on the detail page, `elevation_required` text, admin banner, `cancel_failed` text. | `cd ui && npm test` |
 | 3 | **Toasts.** `Notifier` and `WindowFocus` traits, `windows` crate toast with `CreateToastNotifierWithId` and the features `UI_Notifications` and `Data_Xml_Dom`, the `Activated` handler, `FakeNotifier`, `FakeWindowFocus`, toast on finish when the window has no focus, `notifications_enabled` setting. Read the NSIS and MSI templates for the shortcut AppUserModelID. SPEC §6.9. | `cd src-tauri && cargo test --lib platform && cargo test --lib ipc` |
-| 4 | **In-app scan.** `services/schedule.rs`, `update_scan` settings, the scan result rules, the `ActiveOperations` wait, settings UI. Adds `--source winget` to `list_updates_args()` (WP6 gap row) unless WP6 did. `tokio` `test-util` dev feature. SPEC §6.10. | `cd src-tauri && cargo test --test schedule` |
+| 4 | **In-app scan.** `services/schedule.rs`, `update_scan` settings, the scan result rules, the `ActiveOperations` wait, settings UI. Adds `--source winget` to `list_updates_args()` (WP6 gap row) unless WP6 did. SPEC §6.10. | `cd src-tauri && cargo test --lib services::schedule` (the tests live in the crate because the executor fake is crate-private; no `test-util` feature: a paused clock breaks sqlx pool timeouts) |
 | 5 | **Export.** `export_packages`, exports folder, recorded fixture, the `outfile` directive of the subprocess fake, export tests. | `cd src-tauri && cargo test --test import_export export` |
 | 6 | **Import read.** `validate_winget_id()` and its tests, the `DragDrop` handler and `ImportPaths`, `services/import.rs` parser and checks, `read_import_file`, review list UI with tick boxes. Installs nothing. SPEC §6.11. | `cd src-tauri && cargo test --lib -- domain::package services::import` and `cd ui && npm test` |
 | 7 | **Import install.** `start_import`, the queue use, agreement skip, cancel, `store:import-summary`. Waits for the WP6 queue (A11). | `cd src-tauri && cargo test --test import_export` |

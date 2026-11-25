@@ -223,6 +223,21 @@ pub async fn run_check_updates(state: &AppState) -> AppResult<Vec<UpdateAvailabl
     core.executor().await?.list_updates().await
 }
 
+/// SPEC §6.10: the saved update-scan mode (`off`, `daily` or `weekly`).
+pub async fn run_get_update_scan(state: &AppState) -> AppResult<String> {
+    let core = state.core().await?;
+    Ok(crate::services::schedule::mode(&core)
+        .await
+        .as_str()
+        .to_string())
+}
+
+/// SPEC §6.10: saves the update-scan mode; any other text is `invalid_config`.
+pub async fn run_set_update_scan(state: &AppState, mode: &str) -> AppResult<()> {
+    let core = state.core().await?;
+    crate::services::schedule::set_mode(&core, mode).await
+}
+
 /// SPEC §6.3 step 3: updates one package at a time, emitting progress for each, then a summary.
 pub async fn run_update_all(state: &AppState, sink: SharedSink) -> AppResult<UpdatesSummaryEvent> {
     let core = state.core().await?;
@@ -499,6 +514,16 @@ pub async fn read_import_file(
     path: String,
 ) -> Result<ImportReview, AppError> {
     run_read_import_file(&state, &path).await
+}
+
+#[tauri::command]
+pub async fn get_update_scan(state: State<'_, AppState>) -> Result<String, AppError> {
+    run_get_update_scan(&state).await
+}
+
+#[tauri::command]
+pub async fn set_update_scan(state: State<'_, AppState>, mode: String) -> Result<(), AppError> {
+    run_set_update_scan(&state, &mode).await
 }
 
 #[tauri::command]
