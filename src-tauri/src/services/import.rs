@@ -108,17 +108,66 @@ pub fn parse_import(bytes: &[u8]) -> AppResult<ParsedImport> {
 /// Reads a file of at most `MAX_IMPORT_BYTES`. The size is checked before the read, and the
 /// read itself is capped, so a file that grows in between is not read whole.
 pub fn read_limited(path: &Path) -> AppResult<Vec<u8>> {
-    if std::fs::metadata(path)?.len() > MAX_IMPORT_BYTES {
+    read_limited_file(std::fs::File::open(path)?)
+}
+
+/// `read_limited` on a file that is already open: the size and the bytes come from the same
+/// handle.
+pub fn read_limited_file(file: std::fs::File) -> AppResult<Vec<u8>> {
+    if file.metadata()?.len() > MAX_IMPORT_BYTES {
         return Err(invalid("the file is larger than 1 MiB"));
     }
     let mut buf = Vec::new();
-    std::fs::File::open(path)?
-        .take(MAX_IMPORT_BYTES + 1)
-        .read_to_end(&mut buf)?;
+    file.take(MAX_IMPORT_BYTES + 1).read_to_end(&mut buf)?;
     if buf.len() as u64 > MAX_IMPORT_BYTES {
         return Err(invalid("the file is larger than 1 MiB"));
     }
     Ok(buf)
+}
+
+/// Pure string check, run before any filesystem call on a path from the webview: only an
+/// absolute local drive path (`C:\dir\file`, `C:/dir/file`) passes. A UNC path, a device path
+/// (`\\.\`, `\\?\`, `\\?\UNC\`), a relative or drive-relative path (`C:file`), a doubled
+/// separator, a second `:` (an alternate data stream) and a NUL all fail. Resolving such a
+/// path can open a network or pipe connection (NTLM hash leak), so the core never calls
+/// `canonicalize` on it.
+pub fn is_local_drive_path(requested: &str) -> bool {
+    let b = requested.as_bytes();
+    let sep = |c: u8| c == b'\\' || c == b'/';
+    b.len() >= 4
+        && b[0].is_ascii_alphabetic()
+        && b[1] == b':'
+        && sep(b[2])
+        && !sep(b[3])
+        && !requested[2..].contains([':', '\0'])
+}
+
+/// Opens `canon` (already canonical) once and checks the handle, not the path: the open does
+/// not follow a link in the last component (`FILE_FLAG_OPEN_REPARSE_POINT`), and a reparse
+/// point or a non-file is refused. This closes the swap of the file for a link between the
+/// path check and the open. A link swapped into a parent folder in that gap is not caught.
+fn open_checked(canon: &Path) -> AppResult<std::fs::File> {
+    let denied = || invalid("this file cannot be read here; drop it on the window instead");
+    let mut opts = std::fs::OpenOptions::new();
+    opts.read(true);
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        opts.custom_flags(0x0020_0000); // FILE_FLAG_OPEN_REPARSE_POINT
+    }
+    let file = opts.open(canon).map_err(|_| denied())?;
+    let meta = file.metadata().map_err(|_| denied())?;
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        if meta.file_attributes() & 0x400 != 0 {
+            return Err(denied()); // FILE_ATTRIBUTE_REPARSE_POINT
+        }
+    }
+    if !meta.is_file() {
+        return Err(denied());
+    }
+    Ok(file)
 }
 
 /// Why a row can or cannot be ticked.
@@ -219,7 +268,19 @@ impl ImportPaths {
     /// caller does not open the file.
     pub fn resolve(&self, requested: &str, exports_dir: &Path) -> AppResult<PathBuf> {
         let denied = || invalid("this file cannot be read here; drop it on the window instead");
-        if requested.is_empty() || requested.contains('\0') {
+        // A recorded drop path (canonical, often `\?\C:\...`) matches by string, no disk call.
+        let recorded = self
+            .dropped
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .iter()
+            .find(|p| p.as_os_str() == std::ffi::OsStr::new(requested))
+            .cloned();
+        if let Some(p) = recorded {
+            return Ok(p);
+        }
+        // Before any filesystem call: `canonicalize` on a UNC or device path connects out.
+        if !is_local_drive_path(requested) {
             return Err(denied());
         }
         let canon = std::fs::canonicalize(requested).map_err(|_| denied())?;
@@ -242,6 +303,16 @@ impl ImportPaths {
             return Ok(canon);
         }
         Err(denied())
+    }
+}
+
+impl ImportPaths {
+    /// `resolve`, then one open of the canonical path with a checked handle (`open_checked`),
+    /// then the capped read from that same handle. Returns the display name and the bytes.
+    pub fn read(&self, requested: &str, exports_dir: &Path) -> AppResult<(String, Vec<u8>)> {
+        let canon = self.resolve(requested, exports_dir)?;
+        let bytes = read_limited_file(open_checked(&canon)?)?;
+        Ok((display_name(&canon), bytes))
     }
 }
 
@@ -377,6 +448,63 @@ mod tests {
         // Not dropped and not in the exports folder.
         let err = fx.paths.resolve(&s(&other), &fx.exports).unwrap_err();
         assert!(matches!(err, AppError::InvalidConfig(_)));
+    }
+
+    #[test]
+    fn only_a_local_drive_path_passes_the_string_check() {
+        for ok in ["C:\\a\\b.json", "d:/a/b.json", "Z:\\x"] {
+            assert!(is_local_drive_path(ok), "{ok}");
+        }
+        for bad in [
+            "",
+            "\\\\host\\share\\x.json",
+            "//host/share/x.json",
+            "\\\\?\\UNC\\host\\share\\x.json",
+            "\\\\.\\pipe\\x",
+            "\\\\?\\C:\\a\\b.json",
+            "\\\\.\\C:\\a",
+            "a.json",
+            "..\\a.json",
+            "\\a\\b.json",
+            "C:a.json",
+            "C:",
+            "C:\\\\host\\x",
+            "C:\\a\\b.json:stream",
+            "C:\\a\0b.json",
+            "1:\\a.json",
+        ] {
+            assert!(!is_local_drive_path(bad), "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn network_and_device_paths_are_refused_before_the_disk() {
+        let fx = fx();
+        // The exports folder does not exist: only the string check can have refused these.
+        let missing = fx.dir.path().join("none");
+        for bad in [
+            "\\\\host\\share\\x.json",
+            "\\\\?\\UNC\\host\\share\\x.json",
+            "\\\\.\\pipe\\x",
+            "\\\\?\\C:\\a\\x.json",
+            "x.json",
+            "..\\x.json",
+        ] {
+            let err = fx.paths.resolve(bad, &missing).unwrap_err();
+            assert!(matches!(err, AppError::InvalidConfig(_)), "{bad}");
+        }
+    }
+
+    #[test]
+    fn read_returns_the_file_name_and_bytes() {
+        let fx = fx();
+        let ok = put(&fx.exports, "store-export-2026-11-25.json");
+        let (name, bytes) = fx
+            .paths
+            .read(&ok.display().to_string(), &fx.exports)
+            .unwrap();
+        assert_eq!(name, "store-export-2026-11-25.json");
+        assert_eq!(bytes, FILE.as_bytes());
     }
 
     #[test]

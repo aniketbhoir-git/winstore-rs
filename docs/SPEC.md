@@ -1121,20 +1121,31 @@ nothing kept; an oversized temp file; a second export replaces the file);
 
 **Import: read** (*built on branch, step 6*; install is step 7, planned). `read_import_file`:
 
-1. **Path.** The core opens a path only in two cases. *Dropped:* the main window's
+1. **Path.** *String check first:* `is_local_drive_path()` (a pure function, no disk access)
+   refuses anything but an absolute local drive path (`C:\dir\file`): a UNC path, a device
+   path (`\\.\`, `\\?\`, `\\?\UNC\`), a relative or drive-relative path, a second `:`, a NUL. It runs
+   before `canonicalize` (a string equal to a recorded drop path, which is canonical and may start with `\\?\`, is matched first, with no disk call), because resolving a network or pipe path connects out (NTLM hash
+   leak). Then the core opens a path only in two cases. *Dropped:* the main window's
    `DragDropEvent::Drop` is handled in Rust (`lib.rs`); each dropped path is canonicalised and,
    when it is a regular file, recorded in `ImportPaths` (`services/import.rs`; in `AppState`;
    at most 16 entries, the oldest goes first, in memory only). The webview gets the canonical
    path and the file name in `store:import-dropped`. *Exports folder:* the canonical path of a
    regular file with the extension `.json` whose parent is the canonical exports folder. Any
    other path, a missing path, a directory, or a link that resolves outside the folder gives
-   `invalid_config`. No file-dialog dependency.
+   `invalid_config`. No file-dialog dependency. *Open:* the file is opened once, with
+   `FILE_FLAG_OPEN_REPARSE_POINT`, and the handle is checked (not a reparse point, a regular
+   file); size and bytes are read from that handle. Remaining gap: a link swapped into a
+   parent folder between the path check and the open is not caught.
 2. **Parser.** `parse_import()` reads UTF-8 (a BOM is allowed) into a strict subset of the
    schema: `Sources[].SourceDetails.Name` (optional) and `Sources[].Packages[]` with
    `PackageIdentifier` (non-empty) and `Version` (optional); other fields are ignored. Limits:
    1 MiB (`metadata().len()` is checked before the read, and the read is capped) and 500
    packages (counted before duplicates are merged). Larger, bad JSON or an empty id gives
-   `invalid_config`. The export check uses the same parser.
+   `invalid_config`. The export check uses the same parser, so an export of more than 500
+   winget packages (or over 1 MiB) fails with `winget_failed` and saves nothing; the UI says
+   that Store exports at most 500 apps. Ids with Unicode format characters (category Cf, such
+   as `U+200B` to `U+200F`, `U+202A` to `U+202E`, `U+2060` to `U+2064`, `U+FEFF`) or
+   `U+FFFE`/`U+FFFF` fail the id check.
 3. **Id check.** `validate_winget_id()` (`domain/package.rs`) follows the `PackageIdentifier`
    pattern of the winget manifest schema (read from manifest version 1.10.0, the latest on
    `microsoft/winget-cli` master, 2026-11-25; 1.9.0 has the same line) plus the leading-`-`
@@ -1147,7 +1158,7 @@ nothing kept; an oversized temp file; a second export replaces the file);
    paid rule has no row. When `winget list` fails, no row is `installed` from it and
    `installed_known` is false; the UI says so. `Version` is shown, never used.
 5. **UI.** `ImportPanel.svelte`: a drop hint, then the file name and one row per package with
-   its own tick box (none ticked at the start, no "select all": open owner question, design
+   its own tick box (ticks keyed by `package_id|source`; none ticked at the start, no "select all": open owner question, design
    "Owner questions" 3). It shows "N selected". It has no install button: install is step 7.
    All file text is shown as text.
 6. **Effects.** The command changes nothing on the system. It starts one process at most:
