@@ -1335,7 +1335,7 @@ sleep 60000
 }
 
 /// SPEC §6.6 tests (a, b): a consented retry for a version that is gone ends with the error
-/// that the exit code map gives (0x8A150017 is not mapped yet, so `winget_failed`), and the
+/// that the exit code map gives (0x8A150017 maps to `package_not_found`), and the
 /// attempt is over: no flag came from nowhere.
 #[tokio::test]
 async fn consented_retry_with_a_gone_version_ends_with_the_mapped_error() {
@@ -1348,7 +1348,7 @@ async fn consented_retry_with_a_gone_version_ends_with_the_mapped_error() {
     let (events, outcome) = collect(fx.cli.install(&pkg("A.B"), &req).await.unwrap()).await;
     assert_eq!(events.last().unwrap().stage, OperationStage::Failed);
     match outcome {
-        Err(e) => assert_eq!(e.code(), "winget_failed", "{e:?}"),
+        Err(e) => assert_eq!(e.code(), "package_not_found", "{e:?}"),
         Ok(()) => panic!("a missing version cannot succeed"),
     }
     assert!(accept_flags(&fx.last_argv()).contains(&"--accept-package-agreements"));
