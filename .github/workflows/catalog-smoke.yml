@@ -14,6 +14,9 @@ jobs:
     timeout-minutes: 45
     env:
       STORE_CATALOG_ARTIFACTS: ${{ github.workspace }}\catalog-smoke-artifacts
+      # Pinned tooling (PR #41 finding): the PowerShell module and the winget it repairs to.
+      WINGET_CLIENT_MODULE_VERSION: '1.29.380'
+      WINGET_PINNED_VERSION: '1.29.380'
     steps:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
@@ -23,6 +26,12 @@ jobs:
 
       - name: Make sure winget 1.29 or newer is present (runner only)
         shell: pwsh
+        env:
+          # Without a token the module calls the GitHub API unauthenticated (60 requests an
+          # hour per IP). The cmdlet documents no token parameter; the variable is for any
+          # GitHub client it uses. The job token is free and read-only (contents: read).
+          GH_TOKEN: ${{ github.token }}
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
           $ErrorActionPreference = 'Continue'
           function Get-WingetVersion {
@@ -35,12 +44,12 @@ jobs:
           if ($null -eq $have -or $have -lt [version]'1.29') {
             # The hosted image may lack winget or carry an old one (v1.11.510 on
             # 2026-11-25). Official, free path from Microsoft: the Microsoft.WinGet.Client
-            # module and Repair-WinGetPackageManager, which installs the latest App
-            # Installer (winget). This changes the runner only.
+            # module and Repair-WinGetPackageManager, which installs the App Installer
+            # (winget). Both versions are pinned, not -Latest. This changes the runner only.
             Write-Host 'winget missing or older than 1.29; updating with Microsoft.WinGet.Client'
             Install-PackageProvider -Name NuGet -Force | Out-Null
-            Install-Module -Name Microsoft.WinGet.Client -Force -Repository PSGallery
-            Repair-WinGetPackageManager -AllUsers -Latest -Force
+            Install-Module -Name Microsoft.WinGet.Client -RequiredVersion $env:WINGET_CLIENT_MODULE_VERSION -Force -Repository PSGallery
+            Repair-WinGetPackageManager -AllUsers -Version $env:WINGET_PINNED_VERSION -Force
             $env:Path = "$env:LOCALAPPDATA\Microsoft\WindowsApps;$env:Path"
             "$env:LOCALAPPDATA\Microsoft\WindowsApps" | Out-File -Append -Encoding utf8 $env:GITHUB_PATH
           }
@@ -53,6 +62,27 @@ jobs:
         shell: pwsh
         working-directory: src-tauri
         run: cargo test --test winget_catalog_smoke -- --ignored --nocapture
+
+      - name: Record upgrade and export output (read-only, runner only)
+        if: always()
+        shell: pwsh
+        run: |
+          # Read-only: `upgrade` without --upgrade-all lists only; `export` writes one file and
+          # installs nothing. No agreement flag. If winget asks for an agreement, the prompt
+          # text is what gets recorded.
+          $ErrorActionPreference = 'Continue'
+          $dir = $env:STORE_CATALOG_ARTIFACTS
+          New-Item -ItemType Directory -Force -Path $dir | Out-Null
+          function Record($name, [string[]]$wargs) {
+            $o = Join-Path $dir "$name.stdout.txt"; $e = Join-Path $dir "$name.stderr.txt"
+            $p = Start-Process -FilePath winget -ArgumentList $wargs -NoNewWindow -Wait -PassThru `
+              -RedirectStandardOutput $o -RedirectStandardError $e
+            "args: $wargs`nexit: $($p.ExitCode)" | Out-File -Encoding utf8 (Join-Path $dir "$name.meta.txt")
+          }
+          Record 'upgrade-winget' @('upgrade', '--source', 'winget', '--disable-interactivity')
+          $tmp = Join-Path $env:RUNNER_TEMP 'export.json'
+          Record 'export-winget' @('export', '-o', $tmp, '--source', 'winget', '--disable-interactivity')
+          if (Test-Path $tmp) { Copy-Item $tmp (Join-Path $dir 'export-winget.json') }
 
       - name: Upload raw output
         if: always()
