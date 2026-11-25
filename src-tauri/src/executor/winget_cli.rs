@@ -976,12 +976,19 @@ impl WingetCli {
         for w in &table.warnings {
             tracing::warn!("winget upgrade: {w}");
         }
-        // Rows without a catalog source (ARP entries) cannot be updated by id; skip them.
+        // With a Source column, rows without a catalog source (ARP entries) cannot be updated
+        // by id; skip them. `--source winget` makes winget drop the column; every row is then
+        // from that source.
+        let has_source = table.has_source_column;
         Ok(table
             .rows
             .into_iter()
             .filter_map(|r| {
-                let source = r.source.as_deref().and_then(source_kind)?;
+                let source = if has_source {
+                    r.source.as_deref().and_then(source_kind)?
+                } else {
+                    SourceKind::WingetCommunity
+                };
                 Some(UpdateAvailable {
                     package_id: PackageId::new(source, &r.id),
                     installed_version: r.version,

@@ -988,7 +988,8 @@ Scheduler option (b) is an open owner question and is not built.
    with `,`. A scan is due when there is no last time, the last time is in the future, or the
    last time is at least one interval old (24 hours, 7 days).
 3. A scan does not run while `ActiveOperations` has an entry (`Busy`); it is due again at the
-   next tick. (The wait for the WP6 queue comes with WP6.)
+   next tick. (The wait for the WP6 queue comes with WP6.) The check does not cover the gaps
+   between two packages of an `update_all` run; that is safe, because the scan only reads.
 4. A scan calls `list_updates()` only, which is `winget upgrade --include-unknown --source
    winget --disable-interactivity` (`list_updates_args`; no package, no `--all`, no agreement
    flag). It never starts an install, an update or a removal. The attempt time is saved after

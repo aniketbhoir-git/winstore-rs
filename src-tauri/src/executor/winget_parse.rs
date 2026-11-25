@@ -794,6 +794,9 @@ pub struct ParsedTable {
     pub rows: Vec<TableRow>,
     /// Count from a `N upgrades available.` footer, when present.
     pub footer_count: Option<usize>,
+    /// True when the header has a `Source` column. winget leaves it out when the command is
+    /// limited to one source (`--source winget`).
+    pub has_source_column: bool,
     pub warnings: Vec<String>,
 }
 
@@ -819,6 +822,7 @@ pub fn parse_table(text: &str) -> ParsedTable {
     let name_col = find("Name").unwrap_or(0);
     let avail_col = find("Available");
     let src_col = find("Source");
+    out.has_source_column = src_col.is_some();
 
     let cell = |chars: &[char], col: usize| -> String {
         let start = cols[col].1.min(chars.len());
