@@ -1,6 +1,6 @@
 // The version list offers only what the backend `validate_version` accepts.
 import { emit } from '@tauri-apps/api/event'
-import { fireEvent, render, screen, waitFor } from '@testing-library/svelte'
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/svelte'
 import { beforeAll, describe, expect, it } from 'vitest'
 import type { PackageSummary } from '../lib/types'
 import { isValidVersion } from '../lib/errors'
@@ -46,7 +46,7 @@ describe('version rule', () => {
       versions: ['2.0', '1.0', '-bad', '1 0', 'x'.repeat(65)],
       status: null,
     })
-    const options = screen.getAllByRole('option').map((o) => o.getAttribute('value'))
+    const options = within(screen.getByLabelText('Version')).getAllByRole('option').map((o) => o.getAttribute('value'))
     expect(options).toEqual(['', '2.0', '1.0'])
   })
 

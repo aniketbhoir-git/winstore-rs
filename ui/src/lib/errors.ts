@@ -4,9 +4,18 @@ import type { AppError } from './types'
 export const NO_AGREEMENT_TEXT =
   'The agreement text is not available. Store cannot install this package.'
 
+/** Hardening design §1 rule 6: the text for `elevation_required`. */
+export const ELEVATION_REQUIRED_TEXT =
+  "This app needs administrator rights to install. Windows did not give them. Try again and accept the Windows prompt, or choose 'Only for me' if the app supports it."
+
+/** Hardening design §1 "Cancel of an elevated installer": shown when `cancel_failed` is set. */
+export const CANCEL_FAILED_TEXT = 'The installer runs with administrator rights. Store cannot stop it.'
+
 /** Text for an error. Reads `error.code`, never the message text. */
 export function errorText(e: AppError): string {
-  return e.code === 'agreements_required' ? NO_AGREEMENT_TEXT : e.message
+  if (e.code === 'agreements_required') return NO_AGREEMENT_TEXT
+  if (e.code === 'elevation_required') return ELEVATION_REQUIRED_TEXT
+  return e.message
 }
 
 /**

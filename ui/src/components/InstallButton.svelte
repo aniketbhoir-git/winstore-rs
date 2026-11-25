@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { agreementUrl, errorText } from '../lib/errors'
+  import { agreementUrl, CANCEL_FAILED_TEXT, errorText } from '../lib/errors'
   import { operations } from '../lib/operations.svelte'
   import type { PackageSummary } from '../lib/types'
   import BuyInStoreButton from './BuyInStoreButton.svelte'
@@ -22,9 +22,12 @@
     <button
       class="secondary"
       disabled={!op.operationId || op.cancelFailed}
-      title={op.cancelFailed ? 'Cancel did not stop the installer' : undefined}
+      title={op.cancelFailed ? CANCEL_FAILED_TEXT : undefined}
       onclick={() => operations.cancel(pkg.id)}>Cancel</button>
   </div>
+  {#if op.cancelFailed}
+    <p class="note">{CANCEL_FAILED_TEXT}</p>
+  {/if}
 {:else}
   <button disabled={installed} onclick={() => operations.install(pkg.id)}>
     {installed ? 'Installed' : op?.error && op.operation !== 'remove' ? 'Retry' : 'Install'}
