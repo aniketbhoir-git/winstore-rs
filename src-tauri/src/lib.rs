@@ -5,6 +5,7 @@ pub mod domain;
 pub mod error;
 pub mod executor;
 pub mod ipc;
+pub mod platform;
 pub mod services;
 pub mod sources;
 
@@ -31,6 +32,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             commands::app_version,
+            platform::windows::app_status,
             commands::search_sources,
             commands::get_app_detail,
             commands::start_install,

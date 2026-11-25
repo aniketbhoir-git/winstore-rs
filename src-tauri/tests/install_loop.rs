@@ -309,6 +309,26 @@ async fn failed_install_records_failed_and_the_reason() {
 }
 
 #[tokio::test]
+async fn elevation_required_exit_records_failed_and_the_error_code() {
+    let fx = Fx::new().await;
+    // 0x8A150019 (COMMAND_REQUIRES_ADMIN).
+    fx.script(
+        "out Found Some App [Vendor.SomeApp] Version 1.2.3
+exit 0x8A150019
+",
+    );
+    run_start_install(&fx.state, fx.sink(), PKG, InstallOptions::default())
+        .await
+        .unwrap();
+    let fin = fx.sink.finished(1).await;
+    assert_eq!(fin["ok"], false);
+    assert_eq!(fin["error"]["code"], "elevation_required");
+    assert_eq!(fx.ledger().await, (InstallState::Failed, None, None));
+    let log = run_operation_log(&fx.state, PKG, None).await.unwrap();
+    assert!(log.iter().any(|e| e.level == LogLevel::Error));
+}
+
+#[tokio::test]
 async fn agreements_required_leaves_the_rest_state_and_reports_dialog_data() {
     for (code, source_kind) in [("0x8A150041", false), ("0x8A150046", true)] {
         for (requested, expected) in [(Some("1.0"), "1.0"), (None, "1.2.3")] {

@@ -148,6 +148,8 @@ WP10 adds a mode for headless Windows Server machines; its design is not decided
   | `InvalidConfig` | `invalid_config` | No |
   | `AgreementsRequired { source_agreements, package_agreements }` | `agreements_required` | No |
 
+The message of `ElevationRequired` is: "This app needs administrator rights to install. Windows did not give them. Try again and accept the Windows prompt, or choose 'Only for me' if the app supports it."
+
 - Every error maps to: (stable string `code`, human message, optional raw detail for logs,
   is_retryable flag). IPC returns this as JSON; logs record the raw detail.
 - In one `AgreementsRequired` error, exactly one of the two fields is true. winget reports one
@@ -303,7 +305,7 @@ src-tauri/
       tests.rs         # handler tests
       test_support.rs  # shared test fakes: FakeSource, FakeExec
     platform/
-      windows.rs       # WP11: elevation, toast, scheduled task
+      windows.rs       # WP11: elevation check (built, step 1), toast, scheduled task
   tests/               # integration tests; fixtures/fake_winget.rs is the subprocess fake
 ui/
   src/
@@ -426,6 +428,7 @@ All handlers are in `ipc/commands.rs`. Each one wraps a plain async function tha
 | Command | Arguments | Returns | Behavior |
 |---|---|---|---|
 | `app_version` | none | string | The crate version. |
+| `app_status` | none | `{ elevated: bool }` | True when Store runs as administrator (§6.8). |
 | `search_sources` | `search_id`, `query` | `Vec<PackageSummary>` | Catalog search. Also emits `store:search-results` or `store:search-failed` with the same `search_id`. |
 | `get_app_detail` | `package_id` | `PackageDetail` | Catalog detail. |
 | `start_install` | `package_id`, `options?` (`version?`, `scope?`, `consent?`; *built, F4*) | `OperationStarted { operation_id }` | Refuses a paid item. Checks the ledger, checks `consent` against the open agreement challenges (§6.6), starts winget, sets `Installing`. |
@@ -902,8 +905,28 @@ The review ids are from `docs/reviews/2026-11-11-spec-review.md`.
 | A13 | The exit code is not stored in `operation_log`. The "nothing to do" exit code counts as success for install, update and uninstall. | An `exit_code` column; a rule per operation. | WP6 |
 | A24 | A paid item, an illegal transition, a timeout, a rate limit and a busy installer have no code of their own. | New codes. | WP6 |
 | none | When `services/install.rs` cannot settle the ledger, the failure goes to the trace log only. | Write an Error row to `operation_log`. | WP6 |
-| A12 | Cancel does not depend on the stage; an elevated installer cannot be cancelled. | Stage-dependent cancel. | WP11 |
-| A24 | The UI never sets the install scope, so winget uses its default. | A scope choice and the elevation path. | WP11 |
+| A12 | Cancel does not depend on the stage; an elevated installer cannot be cancelled. | The elevated part is closed by the `cancel_failed` path (first row of this table). The stage-dependent cancel moves to the WP6 queue work. | WP6 |
+| A24 | The UI never sets the install scope, so winget uses its default. | A scope choice and the elevation path. *Elevation core built (step 1); the scope choice is step 2.* | WP11 |
+
+### 6.8 Elevation (WP11, step 1 built)
+
+Design: `docs/designs/hardening.md` section 1.
+
+1. The app runs as the user who started it (manifest level `asInvoker`). It never asks for
+   elevation for itself.
+2. winget runs as a child with the same token. An installer that needs administrator rights
+   asks Windows, and Windows shows its own UAC prompt. The app shows no prompt of its own.
+3. `start_install` takes `scope` (`user`, `machine` or none); none passes no `--scope` flag.
+   Uninstall and update pass no scope.
+4. Exit codes `0x8A150019` and `740` give `ElevationRequired` (`executor/winget_parse.rs`).
+   The terminal stage is `failed` and the ledger follows the "Failure" rows of §6.7. The code
+   of a refused UAC prompt is not verified; until a fixture proves it, a refused prompt ends
+   as `winget_failed`.
+5. `platform/windows.rs` holds the trait `ElevationCheck` and `WindowsElevation`, which reads
+   `TokenElevation` of the process token. A failed read counts as not elevated. The command
+   `app_status` returns `{ elevated: bool }`. When `elevated` is true, the UI (step 2) shows:
+   "Store runs as administrator. Installers will not ask before they change the system." The
+   banner only informs; the app does not refuse to run.
 
 ---
 
