@@ -234,7 +234,7 @@ Fix these in `docs/SPEC.md` before more work packages start. Details are in the 
   built in step 3 (2026-11-25).
 - The repaired SPEC.md needs `/egm:egm-review docs/SPEC.md` before code starts on §6.6.
 - **A5:** headless mode needs a decision record before #11 starts.
-- **A6:** the msstore source is reached through winget only. Settle before #8 starts.
+- **A6:** ✅ settled by `docs/adr/0002-msstore-source.md` (2026-11-25, proposed, option A): the msstore source is reached through the winget CLI only.
 
 Decided on 2026-11-11 — **A7 (phases):** the SPEC §7 order is the schedule. Update-all follows
 the MVP and headless stays in Phase 3. `docs/STRATEGY.md` §1.2 and §1.3 now agree.
