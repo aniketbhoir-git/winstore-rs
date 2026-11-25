@@ -480,8 +480,8 @@ pub fn run_open_exports_folder() -> AppResult<()> {
 /// list. The path must be one the core recorded from a drop, or a `.json` file in the exports
 /// folder. Installs nothing; the only process it may start is `winget list`.
 pub async fn run_read_import_file(state: &AppState, path: &str) -> AppResult<ImportReview> {
-    let file = state.import_paths.resolve(path, &export::exports_dir()?)?;
-    let parsed = import::parse_import(&import::read_limited(&file)?)?;
+    let (file_name, bytes) = state.import_paths.read(path, &export::exports_dir()?)?;
+    let parsed = import::parse_import(&bytes)?;
     let core = state.core().await?;
     let mut installed = std::collections::HashSet::new();
     for rec in crate::db::repo::installs::list(&core.pool).await? {
@@ -501,7 +501,7 @@ pub async fn run_read_import_file(state: &AppState, path: &str) -> AppResult<Imp
         installed.insert(p.id.to_lowercase());
     }
     Ok(import::build_review(
-        &import::display_name(&file),
+        &file_name,
         &parsed,
         &installed,
         installed_known,

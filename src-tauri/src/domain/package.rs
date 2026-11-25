@@ -75,6 +75,16 @@ impl fmt::Display for PackageId {
     }
 }
 
+/// Unicode format characters (general category Cf, from the Unicode character database; no
+/// crate) and the noncharacters U+FFFE and U+FFFF. They are invisible or reorder text.
+fn is_format_or_noncharacter(c: char) -> bool {
+    matches!(u32::from(c),
+        0x00AD | 0x0600..=0x0605 | 0x061C | 0x06DD | 0x070F | 0x0890..=0x0891 | 0x08E2
+        | 0x180E | 0x200B..=0x200F | 0x202A..=0x202E | 0x2060..=0x2064 | 0x2066..=0x206F
+        | 0xFEFF | 0xFFF9..=0xFFFB | 0xFFFE | 0xFFFF | 0x110BD | 0x110CD | 0x13430..=0x1343F
+        | 0x1BCA0..=0x1BCA3 | 0x1D173..=0x1D17A | 0xE0001 | 0xE0020..=0xE007F)
+}
+
 /// Checks a winget `PackageIdentifier` before any call uses it (hardening design §4).
 ///
 /// The rules follow the `PackageIdentifier` pattern of the winget manifest schema
@@ -95,6 +105,7 @@ pub fn validate_winget_id(id: &str) -> AppResult<()> {
     let forbidden = |c: char| {
         c.is_whitespace()
             || c.is_control()
+            || is_format_or_noncharacter(c)
             || matches!(c, '\\' | '/' | ':' | '*' | '?' | '"' | '<' | '>' | '|')
     };
     let mut segments = 0;
@@ -262,6 +273,14 @@ mod tests {
             "a.<b>",
             "a.b|c",
             "a.b?",
+            "a.b\u{200b}c",
+            "a.\u{200f}b",
+            "a.b\u{202e}c",
+            "a.\u{2060}b",
+            "\u{feff}a.b",
+            "a.b\u{fffe}",
+            "a.b\u{ffff}",
+            "a.b\u{ad}c",
             long_segment.as_str(),
             nine.as_str(),
             too_long.as_str(),

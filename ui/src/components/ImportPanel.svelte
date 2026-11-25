@@ -71,8 +71,8 @@
               <input
                 type="checkbox"
                 disabled={row.status !== 'ready'}
-                checked={ticked[row.package_id] ?? false}
-                onchange={(e) => (ticked[row.package_id] = e.currentTarget.checked)}
+                checked={ticked[row.package_id + '|' + row.source] ?? false}
+                onchange={(e) => (ticked[row.package_id + '|' + row.source] = e.currentTarget.checked)}
               />
               <span>{row.package_id}</span>
             </label>
