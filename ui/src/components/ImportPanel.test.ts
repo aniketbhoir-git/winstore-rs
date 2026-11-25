@@ -76,4 +76,23 @@ describe('ImportPanel', () => {
     requestImport('b.json')
     await waitFor(() => expect(screen.getByRole('alert').textContent).toMatch(/not allowed/))
   })
+
+  it('keys ticks by id and source', async () => {
+    mockBackend({
+      read_import_file: () => ({
+        ...review,
+        rows: [
+          { package_id: 'Same.Id', version: null, source: 'winget', status: 'ready' },
+          { package_id: 'Same.Id', version: null, source: 'winget-other', status: 'ready' },
+        ],
+      }),
+    })
+    render(ImportPanel)
+    requestImport('c.json')
+    await waitFor(() => expect(screen.getAllByRole('checkbox').length).toBe(2))
+    const boxes = screen.getAllByRole('checkbox') as HTMLInputElement[]
+    await fireEvent.click(boxes[0])
+    expect(boxes.map((b) => b.checked)).toEqual([true, false])
+    expect(screen.getByText(/1 selected/)).toBeTruthy()
+  })
 })

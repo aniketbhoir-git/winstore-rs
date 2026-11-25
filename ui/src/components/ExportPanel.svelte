@@ -16,6 +16,18 @@
   const AGREEMENT_TEXT =
     'winget needs you to accept the terms of the winget source. Run the command winget list once in a terminal, read the terms, and accept them there.'
 
+  // An export holds at most 500 apps and 1 MiB (SPEC 6.11); the check fails with winget_failed.
+  const TOO_BIG_TEXT =
+    'This device has more than 500 apps from the winget source, or the export file is larger than 1 MiB. Store can export and import at most 500 apps in one file, so nothing was saved.'
+
+  function errorText(error: AppError): string {
+    if (error.code === 'agreements_required') return AGREEMENT_TEXT
+    const text = `${error.message} ${error.detail ?? ''}`
+    if (error.code === 'winget_failed' && /more than 500 packages|larger than 1 MiB/.test(text))
+      return TOO_BIG_TEXT
+    return error.message
+  }
+
   async function run() {
     view = { kind: 'running' }
     folderError = false
@@ -53,7 +65,7 @@
       {#if folderError}<p role="alert">The folder could not be opened.</p>{/if}
     {:else if view.kind === 'error'}
       <p role="alert">
-        {view.error.code === 'agreements_required' ? AGREEMENT_TEXT : view.error.message}
+        {errorText(view.error)}
       </p>
     {/if}
   </div>

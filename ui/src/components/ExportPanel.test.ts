@@ -39,6 +39,24 @@ describe('ExportPanel', () => {
     )
   })
 
+  it('explains the 500 app limit', async () => {
+    mockBackend({
+      export_packages: () => {
+        throw {
+          code: 'winget_failed',
+          message: 'winget failed',
+          detail: 'export the file holds more than 500 packages',
+          retryable: true,
+        }
+      },
+    })
+    render(ExportPanel)
+    await fireEvent.click(screen.getByRole('button', { name: 'Export installed apps' }))
+    await waitFor(() =>
+      expect(screen.getByRole('alert').textContent).toMatch(/more than 500 apps.*nothing was saved/),
+    )
+  })
+
   it('shows the message of another error', async () => {
     mockBackend({
       export_packages: () => {
