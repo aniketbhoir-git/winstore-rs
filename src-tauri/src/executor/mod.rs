@@ -115,6 +115,11 @@ pub trait PackageExecutor: Send + Sync {
     fn list_installed_one<'a>(&'a self, id: &'a str) -> ExecFuture<'a, Vec<InstalledPackage>>;
     fn list_updates<'a>(&'a self) -> ExecFuture<'a, Vec<UpdateAvailable>>;
     fn update<'a>(&'a self, package: &'a PackageId) -> ExecFuture<'a, OperationHandle>;
+    /// `winget export` into `path` (hardening design §4). The default refuses, so a test
+    /// double that does not export needs no code.
+    fn export_installed<'a>(&'a self, _path: &'a std::path::Path) -> ExecFuture<'a, ()> {
+        Box::pin(async { Err(AppError::Unsupported("export is not available".into())) })
+    }
     fn pin<'a>(&'a self, package: &'a PackageId) -> ExecFuture<'a, ()>;
     fn unpin<'a>(&'a self, package: &'a PackageId) -> ExecFuture<'a, ()>;
     fn is_available<'a>(&'a self) -> Pin<Box<dyn Future<Output = bool> + Send + 'a>>;

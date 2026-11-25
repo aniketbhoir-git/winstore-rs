@@ -30,3 +30,8 @@ stdout was a pipe; the bytes are as recorded (CRLF, no spinner bytes appeared).
 - `winget show` takes 457 ms cold (first call of the job) and 258 ms warm.
 - Exit code 0 for a search with results, with no agreement flag.
 - `install-piped.txt` - synthetic (PR #42), `winget install` stdout when piped (1.29.240 and newer): stage lines only. Hand-made from the documented stage lines, not captured; not part of run 45487151178.
+
+- `export-small.json` - synthetic, hand-made in the layout of `winget export` (schema 2.0:
+  `Sources`, each with `SourceDetails` and `Packages`; three ids, no `Version`). Replace it with
+  a file recorded on a hosted runner (hardening design §4 and "Open questions"); the export tests
+  only need the shape.
