@@ -278,11 +278,13 @@ pub fn guard_args_consented(args: &[String], consent: Option<&VerifiedConsent>) 
     for a in args {
         let named = FORBIDDEN_FLAGS
             .iter()
-            .any(|f| a.as_str() == *f || a.strip_prefix(f).is_some_and(|r| r.starts_with('=')));
+            .any(|f| lower == *f || lower.strip_prefix(f).is_some_and(|r| r.starts_with('=')));
         if !named {
             continue;
         }
-        let allowed = match a.as_str() {
+        let allowed = match lower.as_str() {
+        // winget flag names are case-insensitive: compare in lower case.
+        let lower = a.to_ascii_lowercase();
             SOURCE_AGREEMENT_FLAG => {
                 let ok = !seen_source
                     && consent.is_some_and(|c| c.source())
@@ -1548,6 +1550,23 @@ mod tests {
     }
 
     #[test]
+    #[test]
+    fn guard_compares_flag_names_case_insensitively() {
+        for f in [
+            "--Accept-Package-Agreements",
+            "--ACCEPT-SOURCE-AGREEMENTS",
+            "--FORCE",
+            "--Ignore-Security-Hash",
+            "--Force=1",
+        ] {
+            assert!(guard_args(&["install".into(), f.into()]).is_err(), "{f}");
+            assert!(
+                guard_args_consented(&["install".into(), f.into()], None).is_err(),
+                "{f}"
+            );
+        }
+    }
+
     fn remove_builder_never_passes_the_package_flag() {
         let all = RemoveRequest {
             consent: Some(VerifiedConsent::new(true, true)),
