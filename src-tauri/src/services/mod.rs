@@ -2,4 +2,5 @@
 
 pub mod consent;
 pub mod export;
+pub mod import;
 pub mod install;

@@ -3,6 +3,7 @@
   import { api } from './lib/api'
   import { operations } from './lib/operations.svelte'
   import ExportPanel from './components/ExportPanel.svelte'
+  import ImportPanel from './components/ImportPanel.svelte'
   import AppDetail from './routes/AppDetail.svelte'
   import Search from './routes/Search.svelte'
 
@@ -26,6 +27,7 @@
   </header>
   <div hidden={selected !== null}>
     <ExportPanel />
+    <ImportPanel />
     <Search onopen={(id) => (selected = id)} />
   </div>
   {#if selected}

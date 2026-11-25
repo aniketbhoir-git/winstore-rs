@@ -591,3 +591,39 @@ async fn a_stored_non_https_link_is_refused_before_the_browser() {
         assert_eq!(err.code(), "invalid_config", "{url}");
     }
 }
+
+#[tokio::test]
+async fn read_import_file_reads_a_dropped_file_and_refuses_others() {
+    use crate::executor::InstalledPackage;
+    use crate::services::import::RowStatus;
+    let exec = FakeExec::default();
+    exec.installed.lock().unwrap().push(InstalledPackage {
+        id: "Git.Git".into(),
+        name: "Git".into(),
+        version: "2".into(),
+        available: None,
+        source: None,
+    });
+    let (state, _) = state_with(false, false, exec_factory(exec)).await;
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("mine.json");
+    std::fs::write(
+        &file,
+        r#"{"Sources":[{"SourceDetails":{"Name":"winget"},"Packages":[
+            {"PackageIdentifier":"VideoLAN.VLC"},{"PackageIdentifier":"Git.Git"}]}]}"#,
+    )
+    .unwrap();
+    let path = file.display().to_string();
+    // The webview names a path the core never saw: refused, file not opened.
+    let err = run_read_import_file(&state, &path).await.unwrap_err();
+    assert!(matches!(err, AppError::InvalidConfig(_)), "{err:?}");
+    // After a drop event the core recorded it.
+    let canon = state.import_paths.record_drop(&file).unwrap();
+    let review = run_read_import_file(&state, &canon.display().to_string())
+        .await
+        .unwrap();
+    assert_eq!(review.file_name, "mine.json");
+    assert!(review.installed_known);
+    let st: Vec<_> = review.rows.iter().map(|r| r.status).collect();
+    assert_eq!(st, vec![RowStatus::Ready, RowStatus::Installed]);
+}

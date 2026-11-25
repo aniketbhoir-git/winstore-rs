@@ -22,6 +22,7 @@ use crate::executor::winget_parse::safe_https_url;
 use crate::executor::{InstallRequest, InstallScope};
 use crate::services::consent::Consent;
 use crate::services::export::{self, ExportResult};
+use crate::services::import::{self, ImportReview};
 pub use crate::services::install::OperationStarted;
 use crate::services::install::{self, InstallStatus};
 
@@ -435,7 +436,11 @@ pub fn run_open_exports_folder() -> AppResult<()> {
     let dir = export::exports_dir()?;
     std::fs::create_dir_all(&dir)?;
     // Argument vector, no shell; the path comes from the core, never from the webview.
-    std::process::Command::new("explorer")
+    // Full path, so a copy of `explorer.exe` in a search path cannot run instead.
+    let windir = std::env::var_os("WINDIR")
+        .or_else(|| std::env::var_os("SystemRoot"))
+        .unwrap_or_else(|| r"C:\Windows".into());
+    std::process::Command::new(std::path::Path::new(&windir).join("explorer.exe"))
         .arg(&dir)
         .spawn()
         .map(|_| ())
@@ -447,6 +452,46 @@ pub fn run_open_exports_folder() -> AppResult<()> {
     Err(AppError::Unsupported(
         "opening a folder is only supported on Windows".into(),
     ))
+}
+
+/// Hardening design §4, "Import: the file": reads a winget export file and returns the review
+/// list. The path must be one the core recorded from a drop, or a `.json` file in the exports
+/// folder. Installs nothing; the only process it may start is `winget list`.
+pub async fn run_read_import_file(state: &AppState, path: &str) -> AppResult<ImportReview> {
+    let file = state.import_paths.resolve(path, &export::exports_dir()?)?;
+    let parsed = import::parse_import(&import::read_limited(&file)?)?;
+    let core = state.core().await?;
+    let mut installed = std::collections::HashSet::new();
+    for rec in crate::db::repo::installs::list(&core.pool).await? {
+        if rec.state == crate::domain::InstallState::Installed {
+            if let Ok((_, local)) = PackageId::parse(rec.package_id.as_str()) {
+                installed.insert(local.to_lowercase());
+            }
+        }
+    }
+    // A failed `winget list` is not fatal; the review then says it could not check.
+    let listed = match core.executor().await {
+        Ok(e) => e.list_installed().await.ok(),
+        Err(_) => None,
+    };
+    let installed_known = listed.is_some();
+    for p in listed.unwrap_or_default() {
+        installed.insert(p.id.to_lowercase());
+    }
+    Ok(import::build_review(
+        &import::display_name(&file),
+        &parsed,
+        &installed,
+        installed_known,
+    ))
+}
+
+#[tauri::command]
+pub async fn read_import_file(
+    state: State<'_, AppState>,
+    path: String,
+) -> Result<ImportReview, AppError> {
+    run_read_import_file(&state, &path).await
 }
 
 #[tauri::command]
