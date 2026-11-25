@@ -18,6 +18,7 @@ use crate::domain::SourceKind;
 use crate::error::AppResult;
 use crate::executor::winget_cli::{WingetCli, WingetOptions};
 use crate::executor::PackageExecutor;
+use crate::platform::windows::ToastDeps;
 use crate::services::consent::ConsentLedger;
 use crate::services::import::ImportPaths;
 use crate::services::install::{recover_interrupted, ActiveOperations};
@@ -37,6 +38,8 @@ pub struct Core {
     pub active: ActiveOperations,
     /// Open agreement challenges, in memory only (SPEC §6.6 "How consent is bound").
     pub consent: ConsentLedger,
+    /// Toast notifier and window-focus check (SPEC §6.9). Tests put fakes here.
+    pub toasts: ToastDeps,
     executor: Mutex<Option<SharedExecutor>>,
     factory: ExecutorFactory,
 }
@@ -54,6 +57,7 @@ impl Core {
             config,
             active: ActiveOperations::default(),
             consent: ConsentLedger::default(),
+            toasts: ToastDeps::default(),
             executor: Mutex::new(None),
             factory,
         }
@@ -78,16 +82,23 @@ pub struct AppState {
     /// Files dropped on the window; the import reads only these and the exports folder.
     pub import_paths: ImportPaths,
     db_path: Option<PathBuf>,
+    toasts: ToastDeps,
 }
 
 impl AppState {
     /// State that builds its core from the user's data directory on first use.
     pub fn new() -> Self {
+        Self::with_toasts(ToastDeps::default())
+    }
+
+    /// Like `new`, with the toast parts that the real app builds before the window exists.
+    pub fn with_toasts(toasts: ToastDeps) -> Self {
         AppState {
             core: OnceCell::new(),
             import_paths: ImportPaths::default(),
             db_path: ProjectDirs::from("app", "store", "Store")
                 .map(|d| d.data_dir().join("store.db")),
+            toasts,
         }
     }
 
@@ -97,13 +108,18 @@ impl AppState {
             core: OnceCell::new_with(Some(Arc::new(core))),
             import_paths: ImportPaths::default(),
             db_path: None,
+            toasts: ToastDeps::default(),
         }
     }
 
     pub async fn core(&self) -> AppResult<Arc<Core>> {
         let core = self
             .core
-            .get_or_try_init(|| async { build_core(self.db_path.as_deref()).await.map(Arc::new) })
+            .get_or_try_init(|| async {
+                build_core(self.db_path.as_deref(), self.toasts.clone())
+                    .await
+                    .map(Arc::new)
+            })
             .await?;
         Ok(Arc::clone(core))
     }
@@ -115,7 +131,7 @@ impl Default for AppState {
     }
 }
 
-async fn build_core(db_path: Option<&std::path::Path>) -> AppResult<Core> {
+async fn build_core(db_path: Option<&std::path::Path>, toasts: ToastDeps) -> AppResult<Core> {
     let path = db_path.ok_or_else(|| {
         crate::error::AppError::InvalidConfig("cannot resolve data directory".into())
     })?;
@@ -146,7 +162,9 @@ async fn build_core(db_path: Option<&std::path::Path>) -> AppResult<Core> {
         config.cache_ttl_secs,
     );
     let factory = winget_factory(pool.clone());
-    Ok(Core::new(pool, catalog, config, factory))
+    let mut core = Core::new(pool, catalog, config, factory);
+    core.toasts = toasts;
+    Ok(core)
 }
 
 /// Adapters for the sources that are enabled in the database and not disabled in the config.

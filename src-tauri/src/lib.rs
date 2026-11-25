@@ -18,9 +18,18 @@ pub fn run() {
     let filter = EnvFilter::try_from_env("STORE_LOG").unwrap_or_else(|_| EnvFilter::new("info"));
     tracing_subscriber::fmt().with_env_filter(filter).init();
 
+    let notifier = std::sync::Arc::new(platform::windows::WindowsNotifier::default());
+    let focus = std::sync::Arc::new(platform::windows::TauriWindowFocus::default());
+    let toasts = platform::windows::ToastDeps {
+        notifier: notifier.clone(),
+        focus: focus.clone(),
+    };
+
     let result = tauri::Builder::default()
-        .manage(AppState::new())
-        .setup(|app| {
+        .manage(AppState::with_toasts(toasts))
+        .setup(move |app| {
+            notifier.attach(app.handle());
+            focus.attach(app.handle());
             // Warm up the database in the background; commands also build it on first use.
             let handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {

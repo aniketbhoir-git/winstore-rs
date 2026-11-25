@@ -205,7 +205,7 @@ Non-goals:
 | Async | tokio |
 | HTTP | reqwest + serde/serde_json |
 | Persistence | SQLite via sqlx (async) with embedded migrations |
-| Windows APIs | official `windows` crate (notifications, AppModel) |
+| Windows APIs | official `windows` crate (notifications, AppModel). Features in use: `Win32_*` for elevation and job objects, `UI_Notifications` and `Data_Xml_Dom` for toasts (Â§6.9). |
 | UI tests (dev only) | Vitest with `jsdom`, `@testing-library/svelte` and `mockIPC` from `@tauri-apps/api/mocks`. Dev dependencies of `ui/`; none ships in the app. See §8 and `docs/designs/unattended-testing.md`. |
 | Install/remove engine | winget CLI invoked as a subprocess for install/update/remove |
 | Logging | tracing; operation log mirrored into SQLite |
@@ -299,6 +299,7 @@ src-tauri/
       library.rs       # WP6: installed app list
       schedule.rs      # WP11: scheduled update scan
       export.rs        # WP11 step 5: export of the installed packages (built on branch)
+      notify.rs        # WP11 step 3: toast on finish (built)
     ipc/
       commands.rs      # every #[tauri::command] handler
       events.rs        # event names + payload types
@@ -306,7 +307,7 @@ src-tauri/
       tests.rs         # handler tests
       test_support.rs  # shared test fakes: FakeSource, FakeExec
     platform/
-      windows.rs       # WP11: elevation check (built, step 1), toast, scheduled task
+      windows.rs       # WP11: elevation check (built, step 1), toasts (built, step 3), scheduled task
   tests/               # integration tests; fixtures/fake_winget.rs is the subprocess fake
 ui/
   src/
@@ -933,6 +934,33 @@ Design: `docs/designs/hardening.md` section 1.
    `app_status` returns `{ elevated: bool }`. When `elevated` is true, the UI (step 2) shows:
    "Store runs as administrator. Installers will not ask before they change the system." The
    banner only informs; the app does not refuse to run.
+
+### 6.9 Toasts (WP11, step 3 built)
+
+Design: `docs/designs/hardening.md` section 2. Built with the `windows` crate (Â§2), features
+`UI_Notifications` and `Data_Xml_Dom`; no new crate and no webview permission.
+
+1. `platform/windows.rs` holds `trait Notifier { fn show(&self, &Toast) -> Result<(), String> }`
+   and `trait WindowFocus { fn is_focused(&self) -> bool }`. The real parts are `WindowsNotifier`
+   (`ToastNotificationManager::CreateToastNotifierWithId`; the AppUserModelID is the bundle
+   identifier read from the Tauri config) and `TauriWindowFocus` (`WebviewWindow::is_focused`
+   of the window `main`; a missing window counts as not focused). Tests use `FakeNotifier` and
+   `FakeWindowFocus`. `Core.toasts` holds the two parts; `AppState::with_toasts` sets them.
+2. `toast_xml` builds two `<text>` lines and nothing else: no image, link or action element.
+   All text is escaped as XML text.
+3. A click runs an in-process `Activated` handler that shows, restores and focuses the main
+   window. Activation after the app has closed is not handled.
+4. `services/notify.rs`, called at the end of `install::drive`: an operation (install, update,
+   uninstall) that ends while the window has no focus gives one toast, "Install finished" /
+   "Foo.Bar was installed.", "Install failed" / "Foo.Bar did not finish. Open Store for
+   details.", or, for `agreements_required`, "Open Store to review an agreement." A cancel
+   gives none (the user did it). No toast when `notifications_enabled` is `"false"`.
+5. A failed toast call writes one Warn row to the trace log and nothing else. A shown toast
+   writes one Info row. No network call, no other record.
+6. Not built here: the toast of a scheduled scan (step 5) and a settings command or UI for
+   `notifications_enabled` (the key is read; nothing writes it yet).
+7. The NSIS installer sets the AppUserModelID on the Start menu shortcut; the MSI template does
+   not (design, "Shortcut"). Not tested on an installed build.
 
 ---
 
