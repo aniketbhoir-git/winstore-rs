@@ -4,6 +4,8 @@ import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import type {
   AppError,
   ExportResult,
+  ImportDropped,
+  ImportReview,
   InstallOptions,
   InstallStatus,
   OperationFinishedEvent,
@@ -26,6 +28,7 @@ export const EVENTS = {
   searchFailed: 'store:search-failed',
   operationFinished: 'store:operation-finished',
   updatesSummary: 'store:updates-summary',
+  importDropped: 'store:import-dropped',
 } as const
 
 export function toAppError(e: unknown): AppError {
@@ -73,6 +76,8 @@ export const api = {
   /** Exports the installed packages to winget's JSON format in the exports folder (SPEC 6.11). */
   exportPackages: () => call<ExportResult>('export_packages'),
   openExportsFolder: () => call<void>('open_exports_folder'),
+  /** Reads an export file (a dropped one, or one in the exports folder) into a review list. */
+  readImportFile: (path: string) => call<ImportReview>('read_import_file', { path }),
   startServer: (port: number) => call<void>('start_server', { port }),
 }
 
@@ -86,5 +91,6 @@ export const events = {
   onSearchFailed: (h: (e: SearchFailedEvent) => void) => subscribe(EVENTS.searchFailed, h),
   onOperationFinished: (h: (e: OperationFinishedEvent) => void) =>
     subscribe(EVENTS.operationFinished, h),
+  onImportDropped: (h: (e: ImportDropped) => void) => subscribe(EVENTS.importDropped, h),
   onUpdatesSummary: (h: (e: UpdatesSummaryEvent) => void) => subscribe(EVENTS.updatesSummary, h),
 }

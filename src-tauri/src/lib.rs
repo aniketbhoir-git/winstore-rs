@@ -39,6 +39,28 @@ pub fn run() {
             });
             Ok(())
         })
+        .on_window_event(|window, event| {
+            // The core records a dropped file itself; the webview only gets its name.
+            if window.label() != "main" {
+                return;
+            }
+            if let tauri::WindowEvent::DragDrop(tauri::DragDropEvent::Drop { paths, .. }) = event {
+                let state = window.state::<AppState>();
+                for p in paths {
+                    if let Some(canon) = state.import_paths.record_drop(p) {
+                        let payload = ipc::events::ImportDropped {
+                            file_name: services::import::display_name(&canon),
+                            path: canon.display().to_string(),
+                        };
+                        let _ = tauri::Emitter::emit(
+                            window,
+                            ipc::events::EVENT_IMPORT_DROPPED,
+                            payload,
+                        );
+                    }
+                }
+            }
+        })
         .invoke_handler(tauri::generate_handler![
             commands::app_version,
             commands::app_status,
@@ -56,6 +78,7 @@ pub fn run() {
             commands::start_server,
             commands::export_packages,
             commands::open_exports_folder,
+            commands::read_import_file,
         ])
         .run(tauri::generate_context!());
 

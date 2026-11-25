@@ -5,7 +5,7 @@ use common::fake_exe;
 
 use store_lib::error::AppError;
 use store_lib::executor::winget_cli::{WingetCli, WingetOptions};
-use store_lib::services::export::export_installed;
+use store_lib::services::export::{export_installed, export_with_temp};
 
 const FIXTURE: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
@@ -112,4 +112,106 @@ async fn export_source_agreement_stops_it_and_writes_nothing() {
     );
     assert!(names(&fx.exports()).is_empty());
     assert!(!fx.argv().contains("accept"));
+}
+
+/// Runs the export with a temp file inside `fx.dir`; returns the result and that temp path.
+async fn run_with_temp(
+    fx: &Fx,
+) -> (
+    store_lib::error::AppResult<store_lib::services::export::ExportResult>,
+    std::path::PathBuf,
+) {
+    let temp = fx.dir.path().join("tmp-export.json");
+    let r = export_with_temp(&fx.cli, &temp, &fx.exports(), "2026-11-25").await;
+    (r, temp)
+}
+
+#[tokio::test]
+async fn temp_file_is_removed_on_success() {
+    let fx = Fx::new(&format!(
+        "outfile {FIXTURE}
+exit 0
+"
+    ));
+    let (r, temp) = run_with_temp(&fx).await;
+    r.unwrap();
+    assert!(!temp.exists());
+    // Only the final file is in the folder: the atomic temp file is gone.
+    assert_eq!(names(&fx.exports()), vec!["store-export-2026-11-25.json"]);
+}
+
+#[tokio::test]
+async fn a_second_export_replaces_the_file_atomically() {
+    let fx = Fx::new(&format!(
+        "outfile {FIXTURE}
+exit 0
+"
+    ));
+    std::fs::create_dir_all(fx.exports()).unwrap();
+    std::fs::write(fx.exports().join("store-export-2026-11-25.json"), "old").unwrap();
+    let (r, _) = run_with_temp(&fx).await;
+    let r = r.unwrap();
+    assert_eq!(
+        std::fs::read(&r.path).unwrap(),
+        std::fs::read(FIXTURE).unwrap()
+    );
+    assert_eq!(names(&fx.exports()).len(), 1);
+}
+
+#[tokio::test]
+async fn temp_file_is_removed_when_the_file_does_not_parse() {
+    let dir = tempfile::tempdir().unwrap();
+    let bad = dir.path().join("bad.json");
+    std::fs::write(&bad, "this is not json").unwrap();
+    let fx = Fx::new(&format!(
+        "outfile {}
+exit 0
+",
+        bad.display()
+    ));
+    let (r, temp) = run_with_temp(&fx).await;
+    assert!(matches!(r, Err(AppError::WingetFailed { .. })));
+    assert!(!temp.exists());
+    assert!(names(&fx.exports()).is_empty());
+}
+
+#[tokio::test]
+async fn winget_writes_a_file_then_exits_non_zero_keeps_nothing() {
+    let fx = Fx::new(&format!(
+        "outfile {FIXTURE}
+exit 1
+"
+    ));
+    let (r, temp) = run_with_temp(&fx).await;
+    assert!(r.is_err());
+    assert!(!temp.exists(), "the temp file must be removed");
+    assert!(names(&fx.exports()).is_empty());
+}
+
+#[tokio::test]
+async fn an_oversized_temp_file_is_refused_and_removed() {
+    let dir = tempfile::tempdir().unwrap();
+    let big = dir.path().join("big.json");
+    std::fs::write(&big, vec![b' '; 1024 * 1024 + 1]).unwrap();
+    let fx = Fx::new(&format!(
+        "outfile {}
+exit 0
+",
+        big.display()
+    ));
+    let (r, temp) = run_with_temp(&fx).await;
+    assert!(matches!(r, Err(AppError::WingetFailed { .. })), "{r:?}");
+    assert!(!temp.exists());
+    assert!(names(&fx.exports()).is_empty());
+}
+
+#[tokio::test]
+async fn temp_file_is_removed_on_the_source_agreement_path() {
+    let fx = Fx::new(
+        "exit 0x8A150046
+",
+    );
+    let (r, temp) = run_with_temp(&fx).await;
+    assert!(matches!(r, Err(AppError::AgreementsRequired { .. })));
+    assert!(!temp.exists());
 }

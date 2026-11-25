@@ -442,9 +442,12 @@ All handlers are in `ipc/commands.rs`. Each one wraps a plain async function tha
 | `check_updates` | none | `Vec<UpdateAvailable>` | Read-only list (§6.3). Does not write the ledger. |
 | `update_all` | none | `UpdatesSummaryEvent` | Sequential updates with progress. The command exists; WP6 adds its UI and finishes its behavior (§6.3). |
 | `open_store_page` | `product_id` | nothing | Checks the id, then opens the official product page in the browser. |
-| `export_packages` | none | `ExportResult { path, file_name, package_count }` | Runs `winget export -o <temp> --source winget --disable-interactivity`, checks the file, copies it to `Documents\Store\exports\store-export-<date>.json` (*built on branch, WP11 step 5*; §6.11). Never an agreement flag; `agreements_required` writes nothing. |
-| `open_exports_folder` | none | nothing | Creates the exports folder if needed and opens it in the file manager (*built on branch, WP11 step 5*). The path is the core's own. |
+| `export_packages` | none | `ExportResult { path, file_name, package_count }` | Runs `winget export -o <temp> --source winget --disable-interactivity`, checks the file with the import parser, writes it through a temp file and a rename to `Documents\Store\exports\store-export-<date>.json` (*built on branch, WP11 step 5*; §6.11). Never an agreement flag; `agreements_required` writes nothing. |
+| `open_exports_folder` | none | nothing | Creates the exports folder if needed and opens it with `%WINDIR%\explorer.exe` (full path) (*built on branch, WP11 step 5*). The path is the core's own. |
+| `read_import_file` | `path` | `ImportReview { file_name, rows: [{ package_id, version?, source, status }], installed_known }` | Reads a winget export file (*built on branch, WP11 step 6*; §6.11). `path` must be a path the core recorded from a drop event, or a `.json` file in the exports folder; any other path gives `invalid_config` and the file is not opened. Installs nothing. `status` is `ready`, `installed`, `not_valid` or `source_not_supported`. |
 | `start_server` | `port` | error `unsupported` | Stub until WP10. |
+
+Event `store:import-dropped` (*built on branch, WP11 step 6*): `{ path, file_name }` for each file that the core recorded from a drop on the main window. `path` is the canonical path to give back to `read_import_file`.
 
 Not built: pin and unpin commands, a library list, settings read and write, source enable and
 disable.
@@ -1082,7 +1085,7 @@ flow for each item, with criteria that a test can decide. The import flow must s
 user click for a list of packages satisfies hard rule 4.
 *Accept:* not defined; see above.
 
-### 6.11 Import and export (WP11; the export is built on branch, step 5; the import is planned)
+### 6.11 Import and export (WP11; export built on branch, step 5; import read built on branch, step 6; import install planned, step 7)
 
 Design: `docs/designs/hardening.md` §4. The file is winget's own JSON format (`Sources`, each
 with `SourceDetails` and `Packages`), so plain winget reads a file that Store writes.
@@ -1095,19 +1098,65 @@ with `SourceDetails` and `Packages`), so plain winget reads a file that Store wr
    is written.
 2. The command lists the installed packages that the `winget` winget source knows, not only
    the packages that Store installed. It changes nothing on the system.
-3. `services/export.rs` checks the temp file (UTF-8, at most 1 MiB, `Sources[].Packages[]`
-   with a non-empty `PackageIdentifier`). When it passes, the file is written to
-   `Documents\Store\exports\store-export-<date>.json` (UTC date; a second export on the same
-   day replaces the file). Otherwise the command returns `winget_failed` and keeps no file. The
-   temp file is removed in every case. Step 6 replaces this check with the import parser.
+3. `services/export.rs` reads the temp file after a size check (`metadata().len()`, at most
+   1 MiB, before the read) and checks it with the import parser (below). When it parses, the
+   file goes to `Documents\Store\exports\store-export-<date>.json` (UTC date; a second export
+   on the same day replaces the file): it is written to a temp file in the exports folder
+   (name ends in `.tmp`) and renamed over the target, so no reader sees a half-written file.
+   Otherwise the command returns `winget_failed` and keeps no file. The export temp file is
+   removed on every path, also when winget wrote a file and then exited non-zero; a failed
+   write removes the folder temp file.
 4. No `--include-versions`: an import installs the latest version.
 5. The UI ("Export installed apps" in the header) shows the file name, the count and the path
-   as text, with an "Open folder" button (`open_exports_folder`). No file dialog (design
-   "Decisions" 9).
+   as text, with an "Open folder" button (`open_exports_folder`) and a "Review this file"
+   button that opens the file in the import review. No file dialog (design "Decisions" 9).
+   `open_exports_folder` starts `%WINDIR%\explorer.exe` by full path. The agreement hint in
+   the UI is plain text with no markup characters.
 
 *Tests:* `export_args_have_no_agreement_flag` (`executor/winget_cli.rs`);
 `tests/import_export.rs` (`outfile` directive of the fake: copy, bad file, no file, source
-agreement); `ui/src/components/ExportPanel.test.ts`.
+agreement; the temp file is removed on every path; winget writes a file then exits non-zero:
+nothing kept; an oversized temp file; a second export replaces the file);
+`ui/src/components/ExportPanel.test.ts`.
+
+**Import: read** (*built on branch, step 6*; install is step 7, planned). `read_import_file`:
+
+1. **Path.** The core opens a path only in two cases. *Dropped:* the main window's
+   `DragDropEvent::Drop` is handled in Rust (`lib.rs`); each dropped path is canonicalised and,
+   when it is a regular file, recorded in `ImportPaths` (`services/import.rs`; in `AppState`;
+   at most 16 entries, the oldest goes first, in memory only). The webview gets the canonical
+   path and the file name in `store:import-dropped`. *Exports folder:* the canonical path of a
+   regular file with the extension `.json` whose parent is the canonical exports folder. Any
+   other path, a missing path, a directory, or a link that resolves outside the folder gives
+   `invalid_config`. No file-dialog dependency.
+2. **Parser.** `parse_import()` reads UTF-8 (a BOM is allowed) into a strict subset of the
+   schema: `Sources[].SourceDetails.Name` (optional) and `Sources[].Packages[]` with
+   `PackageIdentifier` (non-empty) and `Version` (optional); other fields are ignored. Limits:
+   1 MiB (`metadata().len()` is checked before the read, and the read is capped) and 500
+   packages (counted before duplicates are merged). Larger, bad JSON or an empty id gives
+   `invalid_config`. The export check uses the same parser.
+3. **Id check.** `validate_winget_id()` (`domain/package.rs`) follows the `PackageIdentifier`
+   pattern of the winget manifest schema (read from manifest version 1.10.0, the latest on
+   `microsoft/winget-cli` master, 2026-11-25; 1.9.0 has the same line) plus the leading-`-`
+   rule and `U+007F`. The rules are in the design, §4, "Import: the file", rule 3.
+4. **Rows.** Duplicates (same id and source, case-insensitive) merge into the first row. Each
+   row gets one status, checked in this order: `source_not_supported` (source name is not
+   `winget`, or the file has none), `not_valid` (the id fails the check), `installed` (the
+   ledger has the id in state `installed`, or `winget list` has it; compared case-insensitive),
+   else `ready`. Only `ready` can be ticked. Winget-source packages are never paid, so the
+   paid rule has no row. When `winget list` fails, no row is `installed` from it and
+   `installed_known` is false; the UI says so. `Version` is shown, never used.
+5. **UI.** `ImportPanel.svelte`: a drop hint, then the file name and one row per package with
+   its own tick box (none ticked at the start, no "select all": open owner question, design
+   "Owner questions" 3). It shows "N selected". It has no install button: install is step 7.
+   All file text is shown as text.
+6. **Effects.** The command changes nothing on the system. It starts one process at most:
+   `winget list`.
+
+*Tests:* `domain/package.rs` (id accept and refuse lists); `services/import.rs` (parser, limits,
+review statuses, dropped path, exports folder rules, `..`, link, 17th drop, directory, size
+check); `ipc/tests.rs` (`read_import_file_reads_a_dropped_file_and_refuses_others`);
+`ui/src/components/ImportPanel.test.ts`.
 
 ---
 

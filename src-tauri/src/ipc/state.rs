@@ -20,6 +20,7 @@ use crate::executor::winget_cli::{WingetCli, WingetOptions};
 use crate::executor::PackageExecutor;
 use crate::platform::windows::ToastDeps;
 use crate::services::consent::ConsentLedger;
+use crate::services::import::ImportPaths;
 use crate::services::install::{recover_interrupted, ActiveOperations};
 use crate::sources::winget_repo::WingetRepoSource;
 
@@ -78,6 +79,8 @@ impl Core {
 /// Managed by Tauri; holds the lazily built `Core`.
 pub struct AppState {
     core: OnceCell<Arc<Core>>,
+    /// Files dropped on the window; the import reads only these and the exports folder.
+    pub import_paths: ImportPaths,
     db_path: Option<PathBuf>,
     toasts: ToastDeps,
 }
@@ -92,6 +95,7 @@ impl AppState {
     pub fn with_toasts(toasts: ToastDeps) -> Self {
         AppState {
             core: OnceCell::new(),
+            import_paths: ImportPaths::default(),
             db_path: ProjectDirs::from("app", "store", "Store")
                 .map(|d| d.data_dir().join("store.db")),
             toasts,
@@ -102,6 +106,7 @@ impl AppState {
     pub fn with_core(core: Core) -> Self {
         AppState {
             core: OnceCell::new_with(Some(Arc::new(core))),
+            import_paths: ImportPaths::default(),
             db_path: None,
             toasts: ToastDeps::default(),
         }
