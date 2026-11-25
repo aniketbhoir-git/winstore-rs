@@ -740,6 +740,7 @@ impl WingetCli {
 
     // -- operations -----------------------------------------------------------------------
 
+    #[allow(clippy::too_many_arguments)]
     async fn start_op(
         &self,
         package: &PackageId,

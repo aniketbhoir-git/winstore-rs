@@ -186,7 +186,7 @@ impl ConsentLedger {
                 c.kind == kind
                     && c.version.as_deref() == version
                     && c.winget_source == winget_source
-                    && consent.tokens.iter().any(|t| *t == c.token)
+                    && consent.tokens.contains(&c.token)
             })
         };
         if (source && !fits(Kind::Source)) || (package && !fits(Kind::Package)) {
