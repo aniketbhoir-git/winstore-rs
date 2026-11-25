@@ -141,7 +141,7 @@ describe('InstallButton', () => {
       operation_id: 'op-1',
       package_id: pkg.id,
       ok: false,
-      error: { ...errorAgreementsRequired, agreement_url: null },
+      error: { ...errorAgreementsRequired, agreement_url: null, agreements: [] },
     })
     const alert = await screen.findByRole('alert')
     expect(alert.textContent?.trim()).toBe(
@@ -152,18 +152,16 @@ describe('InstallButton', () => {
     expect(screen.queryByRole('link')).toBeNull()
   })
 
-  it('(a, b, c) agreements_required with a link shows it as plain text, not a link or HTML', async () => {
+  it('(a, b, c) an agreement with no token shows the no-text message, never a dialog', async () => {
     await startRunning()
     await emit('store:operation-finished', {
       operation_id: 'op-1',
       package_id: pkg.id,
       ok: false,
-      error: { ...errorAgreementsRequired, agreement_url: 'https://example.org/terms?a=<b>x</b>' },
+      error: { ...errorAgreementsRequired, consent_token: null },
     })
     const alert = await screen.findByRole('alert')
     expect(alert.textContent).toContain('Store cannot install this package.')
-    expect(alert.textContent).toContain('https://example.org/terms?a=<b>x</b>')
-    expect(alert.querySelector('a, b')).toBeNull()
     expect(screen.queryByRole('dialog')).toBeNull()
   })
 

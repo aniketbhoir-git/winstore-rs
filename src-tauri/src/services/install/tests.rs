@@ -6,7 +6,7 @@ use std::time::Duration;
 use super::*;
 use crate::db::repo::{installs, operation_log};
 use crate::domain::{InstallRecord, InstallState, OperationStage, SourceKind};
-use crate::executor::InstallRequest;
+use crate::executor::{InstallRequest, PackageExecutor, VerifiedConsent};
 use crate::ipc::events::testing::RecordingSink;
 use crate::ipc::events::EVENT_OPERATION_FINISHED;
 use crate::ipc::state::AppState;
@@ -176,6 +176,7 @@ async fn install_with_a_chosen_version_records_it() {
     let req = InstallRequest {
         version: Some("1.0.0".into()),
         scope: None,
+        consent: None,
     };
     start_install(&core, sink_of(&sink), id(), req)
         .await
@@ -366,6 +367,8 @@ fn agreements(source: bool, version: Option<&str>) -> AppError {
         version: version.map(str::to_string),
         agreement_text: None,
         agreement_url: None,
+        agreements: Vec::new(),
+        consent_token: None,
     }
 }
 
@@ -457,6 +460,7 @@ async fn agreements_error_gets_the_target_as_version_when_it_has_none() {
     let req = InstallRequest {
         version: Some("1.0.0".into()),
         scope: None,
+        consent: None,
     };
     start_install(&core, sink_of(&sink), id(), req)
         .await
@@ -861,4 +865,225 @@ async fn up_to_date_update_keeps_the_listed_version() {
         ledger(&pool).await.installed_version.as_deref(),
         Some("1.0")
     );
+}
+
+// ---- Consent binding (SPEC §6.6 case (b), tests tagged (a, b)) ----
+
+fn consent_of(kinds: &[&str], tokens: &[&str]) -> Consent {
+    Consent {
+        kinds: kinds.iter().map(|s| s.to_string()).collect(),
+        tokens: tokens.iter().map(|s| s.to_string()).collect(),
+    }
+}
+
+fn token_of(fin: &serde_json::Value) -> String {
+    fin["error"]["consent_token"]
+        .as_str()
+        .expect("the error carries a consent token")
+        .to_string()
+}
+
+fn versioned(v: &str) -> InstallRequest {
+    InstallRequest {
+        version: Some(v.into()),
+        ..InstallRequest::default()
+    }
+}
+
+#[tokio::test]
+async fn accepted_retry_passes_only_the_accepted_kind_and_the_version() {
+    let exec = Arc::new(FakeExec::scripted(vec![
+        (
+            vec![OperationStage::Failed],
+            Err(agreements(false, Some("1.2.3"))),
+        ),
+        (vec![OperationStage::Done], Ok(())),
+    ]));
+    let (core, _pool, sink) = setup(exec.clone()).await;
+    start_install(&core, sink_of(&sink), id(), versioned("1.2.3"))
+        .await
+        .unwrap();
+    let t = token_of(&finished(&sink, 1).await);
+
+    // Not bound to this package, this version or this kind: nothing starts.
+    let other = PackageId::new(KIND, "Other.App");
+    for (pkg, req, c) in [
+        (
+            other.clone(),
+            versioned("1.2.3"),
+            consent_of(&["package"], &[&t]),
+        ),
+        (id(), versioned("9.9.9"), consent_of(&["package"], &[&t])),
+        (id(), versioned("1.2.3"), consent_of(&["source"], &[&t])),
+        (
+            id(),
+            versioned("1.2.3"),
+            consent_of(&["package"], &["made-up"]),
+        ),
+        (id(), versioned("1.2.3"), consent_of(&["package"], &[])),
+        (
+            id(),
+            InstallRequest::default(),
+            consent_of(&["package"], &[&t]),
+        ),
+    ] {
+        let err = start_install_with_consent(&core, sink_of(&sink), pkg, req, Some(&c))
+            .await
+            .unwrap_err();
+        assert_eq!(err.code(), "invalid_config");
+    }
+    assert_eq!(exec.install_requests.lock().unwrap().len(), 1);
+
+    // The right consent starts the retry with that one flag kind and that version.
+    let c = consent_of(&["package"], &[&t]);
+    start_install_with_consent(&core, sink_of(&sink), id(), versioned("1.2.3"), Some(&c))
+        .await
+        .unwrap();
+    assert_eq!(finished(&sink, 2).await["ok"], true);
+    let reqs = exec.install_requests.lock().unwrap().clone();
+    assert_eq!(reqs.len(), 2);
+    assert_eq!(reqs[0].consent, None);
+    assert_eq!(reqs[1].consent, Some(VerifiedConsent::new(false, true)));
+    assert_eq!(reqs[1].version.as_deref(), Some("1.2.3"));
+
+    // The attempt ended with the success: the same token is dead.
+    let err = start_install_with_consent(&core, sink_of(&sink), id(), versioned("1.2.3"), Some(&c))
+        .await
+        .unwrap_err();
+    assert_eq!(err.code(), "invalid_config");
+}
+
+#[tokio::test]
+async fn a_request_never_brings_its_own_consent_to_the_executor() {
+    let exec = Arc::new(FakeExec::scripted(vec![(
+        vec![OperationStage::Done],
+        Ok(()),
+    )]));
+    let (core, _pool, sink) = setup(exec.clone()).await;
+    let req = InstallRequest {
+        consent: Some(VerifiedConsent::new(true, true)),
+        ..InstallRequest::default()
+    };
+    start_install(&core, sink_of(&sink), id(), req)
+        .await
+        .unwrap();
+    assert_eq!(exec.install_requests.lock().unwrap()[0].consent, None);
+}
+
+#[tokio::test]
+async fn a_start_with_no_consent_ends_the_attempt() {
+    let exec = Arc::new(FakeExec::scripted(vec![
+        (vec![OperationStage::Failed], Err(agreements(true, None))),
+        (vec![OperationStage::Failed], Err(agreements(true, None))),
+    ]));
+    let (core, _pool, sink) = setup(exec.clone()).await;
+    start_install(&core, sink_of(&sink), id(), InstallRequest::default())
+        .await
+        .unwrap();
+    let t1 = token_of(&finished(&sink, 1).await);
+    // A new attempt: no consent; winget asks again and the old token no longer works.
+    start_install(&core, sink_of(&sink), id(), InstallRequest::default())
+        .await
+        .unwrap();
+    let t2 = token_of(&finished(&sink, 2).await);
+    assert_ne!(t1, t2);
+    let c = consent_of(&["source"], &[&t1]);
+    assert!(start_install_with_consent(
+        &core,
+        sink_of(&sink),
+        id(),
+        InstallRequest::default(),
+        Some(&c)
+    )
+    .await
+    .is_err());
+}
+
+#[tokio::test]
+async fn uninstall_consent_is_source_only_and_bound() {
+    let exec = Arc::new(FakeExec::scripted(vec![
+        (vec![OperationStage::Failed], Err(agreements(true, None))),
+        (vec![OperationStage::Done], Ok(())),
+    ]));
+    let (core, pool, sink) = setup(exec.clone()).await;
+    seed(&pool, InstallState::Installed, Some("1.0.0"), false).await;
+    start_uninstall(&core, sink_of(&sink), id()).await.unwrap();
+    let t = token_of(&finished(&sink, 1).await);
+
+    let pkg = consent_of(&["package"], &[&t]);
+    let err = start_uninstall_with_consent(&core, sink_of(&sink), id(), Some(&pkg))
+        .await
+        .unwrap_err();
+    assert_eq!(err.code(), "invalid_config");
+    assert!(exec.remove_requests.lock().unwrap().len() == 1);
+
+    let src = consent_of(&["source"], &[&t]);
+    start_uninstall_with_consent(&core, sink_of(&sink), id(), Some(&src))
+        .await
+        .unwrap();
+    assert_eq!(finished(&sink, 2).await["ok"], true);
+    let reqs = exec.remove_requests.lock().unwrap().clone();
+    assert_eq!(reqs[0].consent, None);
+    assert_eq!(reqs[1].consent, Some(VerifiedConsent::new(true, false)));
+}
+
+#[tokio::test]
+async fn an_update_gets_no_consent_token() {
+    let exec = Arc::new(FakeExec::scripted(vec![(
+        vec![OperationStage::Failed],
+        Err(agreements(false, Some("2.0"))),
+    )]));
+    let (core, pool, sink) = setup(exec.clone()).await;
+    seed(&pool, InstallState::Installed, Some("1.0"), false).await;
+    let handle = exec.update(&id()).await.unwrap();
+    begin(&core, &id(), Operation::Update, Some("2.0".into()), None)
+        .await
+        .unwrap();
+    let res = drive(
+        &core,
+        &sink_of(&sink),
+        handle,
+        &id(),
+        Operation::Update,
+        Some("2.0".into()),
+    )
+    .await;
+    match res {
+        Err(AppError::AgreementsRequired { consent_token, .. }) => assert!(consent_token.is_none()),
+        other => panic!("{other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn a_failed_retry_ends_the_attempt_and_its_tokens() {
+    let exec = Arc::new(FakeExec::scripted(vec![
+        (
+            vec![OperationStage::Failed],
+            Err(agreements(false, Some("1.2.3"))),
+        ),
+        (
+            vec![OperationStage::Failed],
+            Err(AppError::WingetFailed {
+                code: -1978335209,
+                stderr: "No version found matching: 1.2.3".into(),
+            }),
+        ),
+    ]));
+    let (core, _pool, sink) = setup(exec.clone()).await;
+    start_install(&core, sink_of(&sink), id(), versioned("1.2.3"))
+        .await
+        .unwrap();
+    let t = token_of(&finished(&sink, 1).await);
+    let c = consent_of(&["package"], &[&t]);
+    start_install_with_consent(&core, sink_of(&sink), id(), versioned("1.2.3"), Some(&c))
+        .await
+        .unwrap();
+    let fin = finished(&sink, 2).await;
+    assert_eq!(fin["error"]["code"], "winget_failed");
+    // The attempt is over; the same consent opens nothing.
+    let err = start_install_with_consent(&core, sink_of(&sink), id(), versioned("1.2.3"), Some(&c))
+        .await
+        .unwrap_err();
+    assert_eq!(err.code(), "invalid_config");
+    assert_eq!(exec.install_requests.lock().unwrap().len(), 2);
 }

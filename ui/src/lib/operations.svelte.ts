@@ -1,7 +1,9 @@
 // Live state of installs/uninstalls/updates, keyed by package id, fed by backend events.
 import { api, events, toAppError } from './api'
+import { hasAgreementDialog } from './errors'
 import type {
   ActiveOperation,
+  AgreementKind,
   AppError,
   InstallOptions,
   OperationKind,
@@ -22,6 +24,22 @@ export interface OpState {
   error: AppError | null
   /** A progress event reported `cancel_failed`: the installer continues, Cancel is disabled. */
   cancelFailed: boolean
+  /**
+   * An `agreements_required` error that the consent dialog must show (SPEC §6.6 step 3). Set
+   * instead of `error`; cleared by Accept (the retry) or Decline.
+   */
+  agreement: AppError | null
+}
+
+/**
+ * One user action and what the user accepted in it (SPEC §6.6). It lives in memory only, and
+ * a new click on Install or Uninstall starts a new one with nothing accepted.
+ */
+interface Attempt {
+  operation: 'install' | 'remove'
+  options?: InstallOptions
+  /** `consent_token` of each kind that the user accepted in this attempt. */
+  accepted: Partial<Record<AgreementKind, string>>
 }
 
 /** One line of the live log tail. */
@@ -40,6 +58,7 @@ class Operations {
   /** Progress messages of recent operations, oldest first (log tail pane). */
   lines = $state<Record<PackageId, LiveLine[]>>({})
   private started = false
+  private attempts = new Map<PackageId, Attempt>()
 
   /** Subscribes once to progress / finished events; safe to call repeatedly. */
   async init() {
@@ -63,6 +82,7 @@ class Operations {
           cancelFailed:
             e.cancel_failed === true ||
             (!!prev && prev.operationId === e.operation_id && prev.cancelFailed),
+          agreement: null,
         }
         this.addLine(e.package_id, {
           ts: e.timestamp,
@@ -77,6 +97,28 @@ class Operations {
         // A late event of an earlier operation must not finish the current one. An empty id
         // means the invoke reply has not arrived yet; the event then names the operation.
         if (cur.operationId && cur.operationId !== e.operation_id) return
+        // SPEC §6.6 step 3: winget needs an agreement and there is something to show. Open the
+        // dialog and show no error. When the user already accepted this kind in this attempt,
+        // winget asking again is an error, not a second dialog.
+        const kind: AgreementKind | null =
+          !e.ok && e.error && hasAgreementDialog(e.error)
+            ? e.error.source_agreements
+              ? 'source'
+              : 'package'
+            : null
+        const at = this.attempts.get(e.package_id)
+        if (kind && e.error && at && !at.accepted[kind] && !(at.operation === 'remove' && kind === 'package')) {
+          this.byPackage[e.package_id] = {
+            ...cur,
+            operationId: e.operation_id,
+            finished: true,
+            stage: 'failed',
+            indeterminate: false,
+            error: null,
+            agreement: e.error,
+          }
+          return
+        }
         this.byPackage[e.package_id] = {
           ...cur,
           operationId: e.operation_id,
@@ -85,6 +127,7 @@ class Operations {
           fraction: e.ok ? 1 : cur.fraction,
           indeterminate: false,
           error: e.ok || e.error?.code === 'cancelled' ? null : e.error,
+          agreement: null,
         }
       }),
     ])
@@ -122,15 +165,49 @@ class Operations {
       finished: false,
       error: null,
       cancelFailed: false,
+      agreement: null,
     }
   }
 
   install(id: PackageId, options?: InstallOptions) {
+    this.attempts.set(id, { operation: 'install', options, accepted: {} })
     return this.start(id, 'install', () => api.startInstall(id, options))
   }
 
   uninstall(id: PackageId) {
+    this.attempts.set(id, { operation: 'remove', accepted: {} })
     return this.start(id, 'remove', () => api.startUninstall(id))
+  }
+
+  /**
+   * "Accept" in the consent dialog (SPEC §6.6 step 4): starts a new operation of the same
+   * attempt with every kind accepted so far, each with its token, and with the version of the
+   * error. The consent is built here from what the user accepted just now; nothing is stored.
+   */
+  acceptAgreement(id: PackageId) {
+    const cur = this.byPackage[id]
+    const err = cur?.agreement
+    const at = this.attempts.get(id)
+    if (!cur || !err || !at || !err.consent_token) return
+    at.accepted[err.source_agreements ? 'source' : 'package'] = err.consent_token
+    const kinds = (['source', 'package'] as AgreementKind[]).filter((k) => at.accepted[k])
+    const consent = { kinds, tokens: kinds.map((k) => at.accepted[k] as string) }
+    if (at.operation === 'remove') {
+      return this.start(id, 'remove', () => api.startUninstall(id, { consent }))
+    }
+    const options: InstallOptions = {
+      ...at.options,
+      version: err.version ?? at.options?.version,
+      consent,
+    }
+    if (!options.version) delete options.version
+    return this.start(id, 'install', () => api.startInstall(id, options))
+  }
+
+  /** "Cancel" in the consent dialog (SPEC §6.6 step 6): no call, the attempt ends. */
+  declineAgreement(id: PackageId) {
+    this.attempts.delete(id)
+    delete this.byPackage[id]
   }
 
   private async start(
@@ -149,6 +226,7 @@ class Operations {
       finished: false,
       error: null,
       cancelFailed: false,
+      agreement: null,
     }
     try {
       const { operation_id } = await begin()

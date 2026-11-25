@@ -45,6 +45,7 @@ elevation). `tier:any` issues are reserved for community contributors on cheaper
   `docs/ISSUE-BACKLOG.md`. WP5 step 2, the core work, is done on the branch (2026-11-13). Next
   for PR #19: the maintainer's push and merge decision. Then step 3 (a second pull request)
   and F4. Step 3 is built on `impl/6--ui-step3` (2026-11-25): no-text message, disabled Cancel, version filter, UI tests.
+  F4 (case (b), #45) is built on `impl/45--consent-case-b` (2026-11-25): `consent` option on install and uninstall (source kind only), agreement block parser, consent dialog, consent bound to package, version, winget source and kind by a challenge token (SPEC §6.6 "How consent is bound").
 - `docs/SPEC.md` was repaired and reviewed with EGM on 2026-11-11 and 2026-11-12. The reports
   are in `docs/reviews/2026-11-11-spec-review-2/`. A section marked *built* or *built on
   branch* follows the code; a *planned* section overrides it. Where a built section and the
@@ -89,7 +90,7 @@ elevation). `tier:any` issues are reserved for community contributors on cheaper
 
 ## Layout (as built)
 - `src-tauri/src/error.rs` — `AppError` (+ JSON `code/message/detail/retryable`), `AppResult`.
-- `src-tauri/src/config.rs` — `AppConfig` JSON file (no agreement setting; Store passes no agreement flag).
+- `src-tauri/src/config.rs` — `AppConfig` JSON file (no agreement setting; a flag goes to winget only for one consented operation).
 - `src-tauri/src/domain/{package,source,install,progress}.rs` — SPEC §4 types; `string_enum!`
   macro in `domain/mod.rs` gives Display/FromStr/serde for every enum.
 - `src-tauri/src/db/{mod,models}.rs`, `db/repo/*.rs`, `db/migrations/*.sql` — pool, row
@@ -100,7 +101,8 @@ elevation). `tier:any` issues are reserved for community contributors on cheaper
 - `src-tauri/src/executor/{mod,winget_cli,winget_parse}.rs`, `tests/fixtures/fake_winget.rs` —
   `PackageExecutor` trait, winget subprocess wrapper (the stop function is a field, `StopFn`, for tests), progress parser; the fake is a cargo example.
 - `src-tauri/src/ipc/{commands,events,state}.rs` — Tauri commands (`search_sources`, `get_app_detail`, `start_install`, `cancel_install`, `check_updates`, `update_all`, `open_store_page`, `start_server` stub), `store:*` events, lazy `AppState`/`Core`; handlers are plain async fns tested in `ipc/tests.rs`.
-- `ui/src/{lib,components,routes}` — typed API client + event subscriptions, `Search.svelte` (debounced), `AppCard`, `InstallButton`, `ProgressBar`, `SourceBadge`.
+- `src-tauri/src/services/{install,consent}.rs` — install lifecycle; `consent.rs` holds the in-memory agreement challenges and checks a consent against them.
+- `ui/src/{lib,components,routes}` — typed API client + event subscriptions, `Search.svelte` (debounced), `AppCard`, `InstallButton`, `ConsentDialog` (agreement consent, F4), `ProgressBar`, `SourceBadge`.
 
 ## Project skills
 - `winget-executor` — winget CLI facts, output/exit-code parsing, cancellation, fake-winget tests for #4 and #6 — `.claude/skills/winget-executor/SKILL.md`

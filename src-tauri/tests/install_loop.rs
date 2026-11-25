@@ -83,6 +83,7 @@ impl CatalogSource for Source {
                 screenshots: vec![],
                 website: None,
                 license: Some("MIT".into()),
+                license_url: None,
                 release_notes: None,
                 installer: InstallerMetadata {
                     architecture: Some("x64".into()),
@@ -255,7 +256,7 @@ async fn install_cancel_uninstall_loop_is_repeatable_against_the_fake() {
 
         // Cancel an uninstall: the app stays installed.
         fx.script(UNINSTALL_SLOW);
-        let op = run_start_uninstall(&fx.state, fx.sink(), PKG)
+        let op = run_start_uninstall(&fx.state, fx.sink(), PKG, Default::default())
             .await
             .unwrap()
             .operation_id;
@@ -268,7 +269,7 @@ async fn install_cancel_uninstall_loop_is_repeatable_against_the_fake() {
 
         // Uninstall.
         fx.script(UNINSTALL_OK);
-        run_start_uninstall(&fx.state, fx.sink(), PKG)
+        run_start_uninstall(&fx.state, fx.sink(), PKG, Default::default())
             .await
             .unwrap();
         n += 1;
@@ -316,6 +317,7 @@ async fn agreements_required_leaves_the_rest_state_and_reports_dialog_data() {
             let opts = InstallOptions {
                 version: requested.map(str::to_string),
                 scope: None,
+                consent: None,
             };
             run_start_install(&fx.state, fx.sink(), PKG, opts)
                 .await

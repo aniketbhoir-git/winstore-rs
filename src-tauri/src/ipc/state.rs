@@ -18,6 +18,7 @@ use crate::domain::SourceKind;
 use crate::error::AppResult;
 use crate::executor::winget_cli::{WingetCli, WingetOptions};
 use crate::executor::PackageExecutor;
+use crate::services::consent::ConsentLedger;
 use crate::services::install::{recover_interrupted, ActiveOperations};
 use crate::sources::winget_repo::WingetRepoSource;
 
@@ -33,6 +34,8 @@ pub struct Core {
     pub config: AppConfig,
     /// Operations running in this process (install service).
     pub active: ActiveOperations,
+    /// Open agreement challenges, in memory only (SPEC §6.6 "How consent is bound").
+    pub consent: ConsentLedger,
     executor: Mutex<Option<SharedExecutor>>,
     factory: ExecutorFactory,
 }
@@ -49,6 +52,7 @@ impl Core {
             catalog,
             config,
             active: ActiveOperations::default(),
+            consent: ConsentLedger::default(),
             executor: Mutex::new(None),
             factory,
         }

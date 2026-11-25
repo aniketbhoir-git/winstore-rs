@@ -11,7 +11,9 @@ use store_lib::domain::{
 };
 use store_lib::error::{AppError, AppResult};
 use store_lib::executor::winget_cli::{ProcessJob, StopFuture, WingetCli, WingetOptions};
-use store_lib::executor::{InstallRequest, InstallScope, OperationHandle, PackageExecutor};
+use store_lib::executor::{
+    InstallRequest, InstallScope, OperationHandle, PackageExecutor, RemoveRequest, VerifiedConsent,
+};
 
 struct Fx {
     dir: tempfile::TempDir,
@@ -257,6 +259,7 @@ async fn install_passes_no_agreement_flag_in_any_case() {
     let req = InstallRequest {
         version: Some("2.0".into()),
         scope: Some(InstallScope::Machine),
+        consent: None,
     };
     let (_, outcome) = collect(fx.cli.install(&pkg("A.B"), &req).await.unwrap()).await;
     outcome.unwrap();
@@ -281,7 +284,7 @@ async fn forbidden_flags_never_reach_any_command() {
     o.unwrap();
     let (_, o) = collect(fx.cli.update(&id).await.unwrap()).await;
     o.unwrap();
-    let (_, o) = collect(fx.cli.remove(&id).await.unwrap()).await;
+    let (_, o) = collect(fx.cli.remove(&id, &RemoveRequest::default()).await.unwrap()).await;
     o.unwrap();
     fx.cli.pin(&id).await.unwrap();
     fx.cli.unpin(&id).await.unwrap();
@@ -301,7 +304,7 @@ async fn update_and_remove_argv_and_operation_kind() {
     let fx = Fx::new("out Found X [A.B]\nout Starting package uninstall...\nout Successfully uninstalled\nexit 0\n");
     let id = pkg("A.B");
 
-    let (events, o) = collect(fx.cli.remove(&id).await.unwrap()).await;
+    let (events, o) = collect(fx.cli.remove(&id, &RemoveRequest::default()).await.unwrap()).await;
     o.unwrap();
     assert!(events.iter().all(|e| e.operation == Operation::Remove));
     assert!(events.iter().any(|e| e.stage == OperationStage::Finalizing));
@@ -836,7 +839,10 @@ async fn no_command_passes_an_agreement_flag() {
     .await
     .1
     .unwrap();
-    collect(fx.cli.remove(&id).await.unwrap()).await.1.unwrap();
+    collect(fx.cli.remove(&id, &RemoveRequest::default()).await.unwrap())
+        .await
+        .1
+        .unwrap();
     collect(fx.cli.update(&id).await.unwrap()).await.1.unwrap();
     fx.cli.list_installed().await.unwrap();
     fx.cli.list_updates().await.unwrap();
@@ -848,6 +854,111 @@ async fn no_command_passes_an_agreement_flag() {
     assert_eq!(all[6][..2], ["pin", "remove"]);
     for argv in all {
         assert!(!argv.iter().any(|a| a.starts_with("--accept-")), "{argv:?}");
+    }
+}
+
+fn accept_flags(argv: &[String]) -> Vec<&str> {
+    argv.iter()
+        .map(String::as_str)
+        .filter(|a| a.starts_with("--accept-"))
+        .collect()
+}
+
+/// SPEC §6.6 case (b), tests (a, b): the flag reaches winget for the one consented operation
+/// and for no other call, and the package flag never reaches `uninstall`.
+#[tokio::test]
+async fn consented_operation_alone_passes_its_flags() {
+    let fx = Fx::new("exit 0\n");
+    let id = pkg("A.B");
+    let both = Some(VerifiedConsent::new(true, true));
+    let req = |consent| InstallRequest {
+        version: Some("2.0".into()),
+        consent,
+        ..InstallRequest::default()
+    };
+    // 1: consented install, 2: the next install with no consent
+    collect(fx.cli.install(&id, &req(both)).await.unwrap())
+        .await
+        .1
+        .unwrap();
+    collect(fx.cli.install(&id, &req(None)).await.unwrap())
+        .await
+        .1
+        .unwrap();
+    // 3: consented uninstall (source and package asked), 4: uninstall with none
+    let rm = RemoveRequest { consent: both };
+    collect(fx.cli.remove(&id, &rm).await.unwrap())
+        .await
+        .1
+        .unwrap();
+    collect(fx.cli.remove(&id, &RemoveRequest::default()).await.unwrap())
+        .await
+        .1
+        .unwrap();
+    // 5 to 9: update, list, list, pin, unpin never get a flag
+    collect(fx.cli.update(&id).await.unwrap()).await.1.unwrap();
+    fx.cli.list_installed().await.unwrap();
+    fx.cli.list_updates().await.unwrap();
+    fx.cli.pin(&id).await.unwrap();
+    fx.cli.unpin(&id).await.unwrap();
+    let all = fx.invocations();
+    assert_eq!(all.len(), 9);
+    assert_eq!(
+        accept_flags(&all[0]),
+        ["--accept-source-agreements", "--accept-package-agreements"]
+    );
+    assert!(all[0].windows(2).any(|w| w == ["--version", "2.0"]));
+    assert!(accept_flags(&all[1]).is_empty(), "{:?}", all[1]);
+    assert_eq!(accept_flags(&all[2]), ["--accept-source-agreements"]);
+    assert_eq!(all[2][0], "uninstall");
+    for argv in &all[3..] {
+        assert!(accept_flags(argv).is_empty(), "{argv:?}");
+    }
+}
+
+#[tokio::test]
+async fn a_package_only_consent_gives_uninstall_no_flag() {
+    let fx = Fx::new("exit 0\n");
+    let rm = RemoveRequest {
+        consent: Some(VerifiedConsent::new(false, true)),
+    };
+    collect(fx.cli.remove(&pkg("A.B"), &rm).await.unwrap())
+        .await
+        .1
+        .unwrap();
+    assert!(accept_flags(&fx.last_argv()).is_empty());
+}
+
+const POWERBI_BLOCK: &str = "out Agreements for Power BI Desktop [Microsoft.PowerBI] Version 2.159\nout Version: 2.159\nout Agreements:\nout   Microsoft Software License Terms: https://powerbi.microsoft.com/desktop-eula/\nout Package agreements were not agreed to. Operation cancelled.\nexit 0x8A150041\n";
+
+#[tokio::test]
+async fn agreements_required_carries_label_and_link_from_the_block() {
+    let fx = Fx::new(POWERBI_BLOCK);
+    let (_, outcome) = collect(
+        fx.cli
+            .install(&pkg("Microsoft.PowerBI"), &InstallRequest::default())
+            .await
+            .unwrap(),
+    )
+    .await;
+    match outcome {
+        Err(AppError::AgreementsRequired {
+            agreement_url,
+            agreement_text,
+            agreements,
+            package_agreements,
+            ..
+        }) => {
+            assert!(package_agreements);
+            assert_eq!(
+                agreement_url.as_deref(),
+                Some("https://powerbi.microsoft.com/desktop-eula/")
+            );
+            assert!(agreement_text.is_none());
+            assert_eq!(agreements.len(), 1);
+            assert_eq!(agreements[0].label, "Microsoft Software License Terms");
+        }
+        other => panic!("{other:?}"),
     }
 }
 
@@ -864,6 +975,7 @@ async fn agreements_required_carries_dialog_data_and_logs_info() {
             let req = InstallRequest {
                 version: version.map(str::to_string),
                 scope: None,
+                consent: None,
             };
             let (events, outcome) = collect(fx.cli.install(&id, &req).await.unwrap()).await;
             assert_one_terminal_last(&events);
@@ -876,6 +988,7 @@ async fn agreements_required_carries_dialog_data_and_logs_info() {
                     version: got,
                     agreement_text,
                     agreement_url,
+                    ..
                 }) => {
                     assert_eq!(source_agreements, source_kind, "{code}");
                     assert_eq!(package_agreements, package_kind, "{code}");
@@ -904,7 +1017,7 @@ async fn agreements_required_on_remove_and_update_has_source_and_no_version() {
     let id = pkg("A.B");
     for op in [Operation::Remove, Operation::Update] {
         let h = match op {
-            Operation::Remove => fx.cli.remove(&id).await.unwrap(),
+            Operation::Remove => fx.cli.remove(&id, &RemoveRequest::default()).await.unwrap(),
             _ => fx.cli.update(&id).await.unwrap(),
         };
         match collect(h).await.1 {
@@ -1219,4 +1332,24 @@ sleep 60000
     );
     let parent = std::fs::read_to_string(fx.dir.path().join("pid.txt")).unwrap();
     assert!(!alive(&parent), "winget {parent} still running");
+}
+
+/// SPEC §6.6 tests (a, b): a consented retry for a version that is gone ends with the error
+/// that the exit code map gives (0x8A150017 is not mapped yet, so `winget_failed`), and the
+/// attempt is over: no flag came from nowhere.
+#[tokio::test]
+async fn consented_retry_with_a_gone_version_ends_with_the_mapped_error() {
+    let fx = Fx::new("out No version found matching: 9.9.9\nexit 0x8A150017\n");
+    let req = InstallRequest {
+        version: Some("9.9.9".into()),
+        consent: Some(VerifiedConsent::new(false, true)),
+        ..InstallRequest::default()
+    };
+    let (events, outcome) = collect(fx.cli.install(&pkg("A.B"), &req).await.unwrap()).await;
+    assert_eq!(events.last().unwrap().stage, OperationStage::Failed);
+    match outcome {
+        Err(e) => assert_eq!(e.code(), "winget_failed", "{e:?}"),
+        Ok(()) => panic!("a missing version cannot succeed"),
+    }
+    assert!(accept_flags(&fx.last_argv()).contains(&"--accept-package-agreements"));
 }

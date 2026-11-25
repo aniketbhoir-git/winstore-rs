@@ -16,10 +16,10 @@ Contract: SPEC §5.2, §6.2, §6.3, §8.
 | Rule | Detail |
 |---|---|
 | User click starts every mutating op | install, remove, update, pin. Never from a timer or a catalog refresh (SPEC §0 rule 4). |
-| Surface agreements, never pre-accept | Store passes no agreement flag in any command (WP5, case (c) of SPEC §6.6). When winget exits with an agreements code, the operation ends with `agreements_required`. |
+| Surface agreements, never pre-accept | An agreement flag goes to winget for ONE install or uninstall, only after the user's "Accept" in the consent dialog and only with a `VerifiedConsent` (SPEC §6.6 case (b), F4). No config, setting or stored value sets it. Every other command passes none. When winget exits with an agreements code, the operation ends with `agreements_required`. |
 | One op per package id | Acquire `OpGuard` (per-package mutex map, SPEC §1.2) before spawning. |
 | Log every op | Write `operation_log` rows (start, each warn/error line, final exit status). Raw stderr goes in `detail`. |
-| Never use `--force` or `--ignore-security-hash` | No code path, no config switch. `guard_args` refuses them, and in WP5 also the two agreement flags (`FORBIDDEN_FLAGS`); F4 changes the agreement part. |
+| Never use `--force` or `--ignore-security-hash` | No code path, no config switch. `guard_args` refuses them and both agreement flags (`FORBIDDEN_FLAGS`). `guard_args_consented` lets an agreement flag pass only for a `VerifiedConsent` that carries its kind, on `install` (both) or `uninstall` (source only), once, as a bare argument. |
 | No real winget in unit tests | Use the fake fixture. Real winget runs only in CI or Windows Sandbox (SPEC §8), never on a developer machine. |
 
 ## Fixed facts
@@ -32,8 +32,8 @@ Contract: SPEC §5.2, §6.2, §6.3, §8.
 | Sources here | `msstore` (storeedgefd.dsx.mp.microsoft.com/v9.0), `winget` (cdn.winget.microsoft.com/cache), `winget-font` (explicit). Always pass `--source` explicitly. |
 | Read-only catalog calls | `WingetCli::search_catalog` (`search --query T --source winget --count N --disable-interactivity`, 15 s) and `show_package` (`show --id I --exact --source winget --disable-interactivity`, 60 s). No agreement flag; exit 0x8A150046/0x8A150041 -> `agreements_required` with `winget_source` = `winget`. Parsers: `parse_columns`, `parse_show`. |
 | `--disable-interactivity` | Always pass. A prompt that would appear becomes an error exit instead of blocking on stdin; reduces spinner redraws. |
-| `--accept-source-agreements` | Accepts source terms. Valid on install, upgrade, uninstall, list, show, export. Store passes it in no command. |
-| `--accept-package-agreements` | Accepts package license text. Valid on install and upgrade only; uninstall exits 0x8A150002 (spike: uninstall takes only the source flag). Store passes it in no command. |
+| `--accept-source-agreements` | Accepts source terms. Valid on install, upgrade, uninstall, list, show, export. Store passes it only on a consented install or uninstall. |
+| `--accept-package-agreements` | Accepts package license text. Valid on install and upgrade only; uninstall exits 0x8A150002 (spike: uninstall takes only the source flag). Store passes it only on a consented install, never on uninstall. |
 | `--scope user\|machine` | install: choose scope. uninstall/upgrade/list: filter on installed scope. `machine` needs elevation. |
 | `--silent` (`-h`) | Silent installer. Pass for install/upgrade/uninstall (SPEC §6.2). Excludes `--interactive`. |
 | `--exact` (`-e`) | Always pass with `--id` so `Foo.Bar` never matches `Foo.BarBaz`. |
@@ -52,7 +52,9 @@ Contract: SPEC §5.2, §6.2, §6.3, §8.
 ```text
 install:   winget install --id ID --exact --source S [--version V] [--scope user|machine]
              --silent --disable-interactivity --verbose-logs
+             [--accept-source-agreements] [--accept-package-agreements]   (consent only)
 uninstall: winget uninstall --id ID --exact --source S --silent --disable-interactivity
+             [--accept-source-agreements]                                   (consent only)
 update:    winget upgrade --id ID --exact --source S --silent --disable-interactivity --verbose-logs
 installed: winget list --disable-interactivity
 updates:   winget upgrade --include-unknown --disable-interactivity
@@ -60,7 +62,7 @@ updates:   winget upgrade --include-unknown --disable-interactivity
 pin:       winget pin add --id ID --exact | winget pin remove --id ID --exact
 ```
 
-No command line has an agreement flag.
+Only the two bracketed "consent only" flags are agreement flags. No other command line has one.
 
 ## Output parsing
 
@@ -73,7 +75,8 @@ The bar line, license notices, `Installer failed with exit code` and the agreeme
 | Line pattern | Stage | Fraction |
 |---|---|---|
 | `Found <Name> [<Id>] Version <v>` | Resolving | 0.05 |
-| `This application is licensed to you by its owner.` / `Microsoft is not responsible for, nor does it grant any licenses to, third-party packages.` | stay Resolving; note agreements were shown | - |
+| `This application is licensed to you by its owner.` / `Microsoft is not responsible for, nor does it grant any licenses to, third-party packages.` | none: the install notice that winget prints for every install; NOT an agreement (spike E7) | - |
+| `Agreements for <name> [<id>] Version <v>` then `Agreements:` and `  <Label>: <text and/or https link>` lines; or `The \`<source>\` source requires that you view the following agreements before using.` then `<Label>: ...` lines | none; `ProgressParser::agreements_shown()` is true and `agreements()` holds `{label, text, url}` (https links only, `safe_https_url`) | - |
 | `Downloading <url>` | Downloading | 0.10 |
 | Bar line: `██████▒▒▒▒  1.20 MB / 5.00 MB` (units B/KB/MB/GB) or `NN%` | Downloading | 0.10 + 0.50 * done/total |
 | `Successfully verified installer hash` | Installing | 0.65 |
@@ -125,7 +128,7 @@ Full table with verified/inferred marks: `references/winget-cli.md`. Exit codes 
 | 0x8A150011 | INSTALLER_HASH_MISMATCH | `WingetFailed` (security; never offer an override) |
 | 0x8A15002B | UPDATE_NOT_APPLICABLE | Done, no-op |
 | 0x8A150019 | COMMAND_REQUIRES_ADMIN | `ElevationRequired` |
-| 0x8A150041 / 0x8A150046 | PACKAGE / SOURCE_AGREEMENTS_NOT_ACCEPTED | `AgreementsRequired` with `source_agreements`, `package_agreements`, `winget_source`, `version`, `agreement_text`, `agreement_url`. The terminal stage is `failed`, the `operation_log` row is Info, the ledger goes to the rest state (SPEC §6.7). `agreement_text` and `agreement_url` are null until F4 |
+| 0x8A150041 / 0x8A150046 | PACKAGE / SOURCE_AGREEMENTS_NOT_ACCEPTED | `AgreementsRequired` with `source_agreements`, `package_agreements`, `winget_source`, `version`, `agreement_text`, `agreement_url`, `agreements`, `consent_token`. The executor fills the text, link and `agreements` from the block it parsed; the service issues the token (SPEC §6.6 "How consent is bound"). The terminal stage is `failed`, the `operation_log` row is Info, the ledger goes to the rest state (SPEC §6.7) |
 | 0x8A150005, 0x8A15006A, 0x8A15010C | CTRL_SIGNAL, APPTERMINATION, INSTALL_CANCELLED_BY_USER | `Cancelled` |
 | 740 (Win32 installer code) | ERROR_ELEVATION_REQUIRED | `ElevationRequired` (INFERRED) |
 | anything else | - | `WingetFailed{code, stderr}` |
@@ -136,8 +139,12 @@ found"), 0x8A150011 is the hash mismatch, 0x8A150027 is a LibYAML error (not ele
 
 ## Agreements (spike of 2026-11-13)
 
-Decision of 2026-11-13: WP5 builds case (c) of SPEC §6.6. The app passes no agreement flag in
-any operation; case (b) (consent with the link) is later work, F4 in `docs/ISSUE-BACKLOG.md`.
+Decision of 2026-11-13: WP5 builds case (c) of SPEC §6.6 (no flag). Case (b) (consent with the
+link) is built as F4 (2026-11-25): `InstallRequest.consent` and `RemoveRequest.consent` carry a
+`VerifiedConsent`, set only by `services/install.rs` after `services/consent.rs` matched the
+user's consent to an open challenge of that package, version, winget source and kind. The
+install builder and the remove builder (source flag only) add the flag; the guard lets exactly
+that flag through for that one operation.
 
 Answers to the spike questions of SPEC §6.6. Evidence, commands and source lines:
 `docs/spikes/2026-11-13-agreement-consent.md`. winget v1.29.380.
@@ -157,8 +164,8 @@ Answers to the spike questions of SPEC §6.6. Evidence, commands and source line
    - OBSERVED: every agreement found (msstore source, msstore packages, `Microsoft.PowerBI` in
      the winget source) has a label and a URL and **no text**. Only REST sources (msstore) have a
      source agreement; the `winget` source has none (INFERRED from source).
-   - `ProgressParser::agreements_shown()` matches the install disclaimer lines, which winget
-     prints for every install. It does not detect an agreement.
+   - `ProgressParser::agreements_shown()` no longer matches the install disclaimer lines (spike
+     E7; fixed in F4). It is true only after an agreement block header.
 2. **Missing `--version` on install:** 0x8A150017 NO_MANIFEST_FOUND, `No version found
    matching: <v>`. Not 0x8A150014. Observed on `show`; install uses the same function
    (source). Confirm at the first real-winget CI run (F2, #21).
@@ -196,8 +203,9 @@ winget has no cancel API. Cancel means: kill the process tree, then record Cance
 
 - Fixture: `src-tauri/tests/fixtures/fake_winget.rs` (a dev-only cargo example, built by the tests; see its header for the script format).
 - `STORE_WINGET_PATH` points the executor at the fake. Set it per test (temp dir), never process-global.
-- Cover: each stage line, bar progress, table parse (reuse OBSERVED tables from the reference), every exit-code row above, cancel mid-download, cancel that cannot stop the tree (inject a stop function that reports a live tree with `WingetCli::with_stop_fn`; assert one `cancel_failed` event), no agreement flag in any argv (`install_passes_no_agreement_flag_in_any_case`, `no_command_passes_an_agreement_flag`), `--force` / `--ignore-security-hash` never in argv, `\r` spinner noise, invalid UTF-8 bytes, winget missing -> `WingetNotFound`.
-- Real winget runs only in CI or Windows Sandbox (SPEC §8), never on a developer machine. Smoke (Issue #4 acceptance): install and remove one small package there; paste the real output into the reference. The smoke test passes no agreement flag.
+- Consent tests: argv has the flag only for the consented operation (`consented_operation_alone_passes_its_flags`, `a_package_only_consent_gives_uninstall_no_flag`); `consented_guard_lets_through_only_the_consented_flag_on_install_and_uninstall`; the block parser (`package_block_gives_label_and_link`, `source_block_gives_label_and_link`, `the_install_notice_is_not_an_agreement`).
+- Cover: each stage line, bar progress, table parse (reuse OBSERVED tables from the reference), every exit-code row above, cancel mid-download, cancel that cannot stop the tree (inject a stop function that reports a live tree with `WingetCli::with_stop_fn`; assert one `cancel_failed` event), no agreement flag in any argv without a consent (`install_passes_no_agreement_flag_in_any_case`, `no_command_passes_an_agreement_flag`), `--force` / `--ignore-security-hash` never in argv, `\r` spinner noise, invalid UTF-8 bytes, winget missing -> `WingetNotFound`.
+- Real winget runs only in CI or Windows Sandbox (SPEC §8), never on a developer machine. Smoke (Issue #4 acceptance): install and remove one small package there; paste the real output into the reference. The smoke test passes no agreement flag (no consent).
 - Gate: `cargo build`, `cargo test`, `cargo clippy --all-targets -- -D warnings`, `cargo fmt` (PATH note in CLAUDE.md).
 
 ## Install loop (Issue #6) glue

@@ -158,15 +158,19 @@ WP10 adds a mode for headless Windows Server machines; its design is not decided
   - `version`: the version that the operation gave to winget. When it gave none, the latest
     version of the cached detail. `null` only when the core has no version. *On the branch:*
     an uninstall gives `null`, and `update_all` gives the latest version of its update scan.
-  - `agreement_text`: the agreement text, or `null`. Spike question 1 (§6.6) finds its origin.
-  - `agreement_url`: a link to the agreement, or `null`. For a package agreement it is the
-    `license_url` of the package detail (§4.2). For a source agreement it is the URL that
-    winget prints, if the spike finds one.
+  - `agreement_text`: the agreement texts that winget printed, joined, or `null`.
+  - `agreement_url`: the first https link that winget printed, or `null`. For a package
+    agreement with no link in the output it is the `license_url` of the package detail (§4.2).
+  - `agreements`: every agreement that winget printed, as `{ label, text, url }` (`text` and
+    `url` can be `null`; `url` is https only). The dialog shows these. *Built, F4.*
+  - `consent_token`: a handle that binds a later consent to this package, version, winget
+    source and kind (§6.6 "How consent is bound"), or `null` (an update gets none). *Built, F4.*
 
   The executor fills `winget_source` and `version` (the requested version) before the operation
-  ends. The service (`services/install.rs`) fills `version` with the latest version of the
-  detail when the request gave none. In WP5 (case (c)) `agreement_text` and `agreement_url` are
-  always `null`; F4 fills them.
+  ends, and parses `agreement_text`, `agreement_url` and `agreements` from the agreement block
+  of winget's output (`ProgressParser`). The service (`services/install.rs`) fills `version`
+  with the latest version of the detail when the request gave none, and issues
+  `consent_token`. *Built, F4 (case (b)).*
 
 ### 1.4 Goals and non-goals
 
@@ -339,8 +343,8 @@ The values of `Operation` and `OperationStage` are shown as their wire strings.
   store product id (optional; WP7 adds it).
 - `PackageDetail`: everything in Summary plus full description, screenshots, website, license,
   release notes, installer metadata (architecture, install type, size, sha256), map of
-  available versions. *Planned (with case (b), F4; §6.6):* `license_url` (optional), from the
-  catalog data. It only feeds `agreement_url`.
+  available versions, and `license_url` (optional; https only; *built, F4*): the `License Url`
+  of `winget show`. It only feeds `agreement_url`.
 - `ProgressEvent`: operation id, package id, operation kind, stage, fraction (0.0–1.0),
   message, timestamp, `cancel_failed` (boolean, default false; *built on the branch*,
   §6.7 gap table) and `indeterminate` (boolean, default false). `indeterminate` is true while
@@ -353,19 +357,21 @@ The values of `Operation` and `OperationStage` are shown as their wire strings.
   is reserved: no work package defines automatic updates.
 - `OperationStarted`: operation id.
 - Install options (the `options` argument of §5.4): version (optional), scope (optional;
-  `user` or `machine`; the UI does not set it before WP11), and *planned (§6.6)* consent.
-- Consent (*planned, §6.6*), as JSON: `{ "kinds": [...] }`.
+  `user` or `machine`; the UI does not set it before WP11), and consent (*built, F4; §6.6*).
+- Consent (*built, F4; §6.6*), as JSON: `{ "kinds": [...], "tokens": [...] }`.
   - `kinds`: a list with `"source"`, `"package"`, or the two. An empty list is the same as no
     consent.
+  - `tokens`: the `consent_token` of each `agreements_required` error that the user accepted
+    (one for each kind). The core refuses a kind that no token of the same package, version,
+    winget source and kind backs (`invalid_config`; §6.6 "How consent is bound").
   - The consent holds no version. The one version field is `options.version`.
   - `start_install` needs `options.version` when `kinds` has `"package"`; with no version it
     returns `invalid_config`. The UI sets it to the `version` field of the
     `agreements_required` error (§1.3). With the kind `"source"` only, `options.version`
     stays optional.
   - `start_uninstall` accepts the kind `"source"` only. The kind `"package"` there returns
-    `invalid_config`. This applies only if `winget uninstall` accepts the source agreement
-    flag (spike question 3). If it accepts no agreement flag, `start_uninstall` gets no
-    `options`.
+    `invalid_config` (`winget uninstall` accepts the source agreement flag only; spike
+    question 3).
 - `InstallStatus`: package id, state, installed version, target version, pinned, last updated,
   and the active operation (operation id and kind) when one runs.
 - `OperationLogEntry`: id, time, level, operation kind, package id, message, detail.
@@ -422,8 +428,9 @@ All handlers are in `ipc/commands.rs`. Each one wraps a plain async function tha
 | `app_version` | none | string | The crate version. |
 | `search_sources` | `search_id`, `query` | `Vec<PackageSummary>` | Catalog search. Also emits `store:search-results` or `store:search-failed` with the same `search_id`. |
 | `get_app_detail` | `package_id` | `PackageDetail` | Catalog detail. |
-| `start_install` | `package_id`, `options?` (`version?`, `scope?`; *planned (§6.6):* `consent?`) | `OperationStarted { operation_id }` | Refuses a paid item. Checks the ledger, starts winget, sets `Installing`. |
-| `start_uninstall` | `package_id`; *planned (§6.6), only if spike question 3 permits it:* `options?` (`consent?`) | `OperationStarted` | Needs a ledger row. Sets `Uninstalling`. |
+| `start_install` | `package_id`, `options?` (`version?`, `scope?`, `consent?`; *built, F4*) | `OperationStarted { operation_id }` | Refuses a paid item. Checks the ledger, checks `consent` against the open agreement challenges (§6.6), starts winget, sets `Installing`. |
+| `start_uninstall` | `package_id`, `options?` (`consent?`, kind `source` only; *built, F4*) | `OperationStarted` | Needs a ledger row. Checks `consent` as above. Sets `Uninstalling`. |
+| `open_agreement_link` | `package_id`, `url` (*built, F4*) | nothing | Opens `url` in the system browser, only when it is a link of a live agreement challenge of that package (§6.6); otherwise `invalid_config`. |
 | `cancel_install` | `operation_id` | nothing | Cancels an install, an uninstall or an update. An unknown or finished id is not an error. |
 | `get_install_status` | `package_id` | `InstallStatus` | The ledger row and the active operation, if one runs. No row gives `NotInstalled`. |
 | `get_operation_log` | `package_id`, `limit?` | `Vec<OperationLogEntry>` | The log tail, oldest first. Default 100 rows, maximum 500. |
@@ -433,8 +440,7 @@ All handlers are in `ipc/commands.rs`. Each one wraps a plain async function tha
 | `start_server` | `port` | error `unsupported` | Stub until WP10. |
 
 Not built: pin and unpin commands, a library list, settings read and write, source enable and
-disable. The `consent` option of §6.6 is also not built; the table marks it *planned* on
-`start_install` and `start_uninstall`.
+disable.
 
 | Event | Payload |
 |---|---|
@@ -513,7 +519,7 @@ Blocked. Do not implement. A decision record must first answer `docs/STRATEGY.md
 question 6: the hosting model, authentication in each mode, origin checks, consent over HTTP
 (§6.6), and winget on Windows Server.
 
-### 6.6 Agreement consent (WP5; case (c) built on branch, case (b) planned as F4)
+### 6.6 Agreement consent (WP5; case (c) built on branch; case (b) built as F4, 2026-11-25)
 
 Hard rule 4 applies. The app never accepts an agreement that the user did not see.
 
@@ -549,6 +555,37 @@ the webview:
 2. Show each piece of catalog data (name, description, release notes, agreement text) as
    text. Never put it into the page as HTML. On the branch the UI obeys this; a test must
    keep it so.
+3. *Built, F4.* The agreement link is shown as text and opens only through
+   `open_agreement_link` in the system browser; the UI has no anchor with an address.
+
+#### How consent is bound (case (b), F4)
+
+The core cannot see a click, but it can refuse a consent that no `agreements_required` asked
+for. This keeps a script in the webview from reusing one acceptance for another package.
+
+- When an install or uninstall ends with `agreements_required`, `services/install.rs` issues a
+  *challenge*: a random 128-bit token, held in memory only (`services/consent.rs`), bound to the
+  package id, the `version`, the winget source and the kind (source or package). The token is
+  in the error as `consent_token`. An update gets none.
+- `options.consent` is `{ kinds, tokens }`. For each kind in `kinds` the core needs a token of a
+  live challenge with that kind, the same package id, the same version (`options.version`; none
+  for an uninstall) and the same winget source of the command. Otherwise the command returns
+  `invalid_config` and nothing starts. The kind `package` needs a version and is refused for an
+  uninstall; no consent is valid for an update.
+- The IPC layer never builds the consent that the executor sees. `services/install.rs`
+  replaces `InstallRequest.consent` with the result of the check (`VerifiedConsent`), so a
+  caller of the service cannot bring its own.
+- Challenges end with the attempt: any operation of the package that ends in something other
+  than `agreements_required`, any start with no consent (a new attempt), or 15 minutes. A token
+  is not single-use inside the attempt, because the retry of the second kind carries both.
+- At the argument level, `guard_args` (every call with no consent path) refuses both agreement
+  flags. `guard_args_consented` lets a flag pass only for a `VerifiedConsent` that carries its
+  kind, on `install` (both kinds) or `uninstall` (source only), as a bare argument, once.
+  `--force` and `--ignore-security-hash` never pass.
+- `open_agreement_link` opens a link only when a live challenge of that package showed it.
+- Not covered, as before: a script that runs in the webview can start an operation, read the
+  error, and send the consent itself. Only the rules of "Trust boundary" and the later native
+  dialog (alternatives table) close that.
 
 #### Alternatives
 
@@ -613,10 +650,11 @@ fields: "The agreement text is not available. Store cannot install this package.
 agreement that it found has a label and a link, and no text. The maintainer approved the
 fallback of case (b) on 2026-11-12: a dialog that names the agreement and shows its link
 satisfies hard rule 4. On 2026-11-13 the maintainer decided that **WP5 builds case (c)**, and
-that case (b) follows as later work (backlog F4). In WP5 each `agreements_required` thus ends
-with the "no text" rule, the app never passes an agreement flag, and `start_install` and
-`start_uninstall` get no `consent` option. The work for case (b) uses the answer to spike
-question 3: `start_uninstall` then gets a consent with the source kind only.
+that case (b) follows as later work (backlog F4). In WP5 each `agreements_required` thus ended
+with the "no text" rule, and the app passed no agreement flag. *Case (b) is built (F4,
+2026-11-25):* `start_install` and `start_uninstall` take `options.consent`, an uninstall with the
+source kind only (spike question 3); the "no text" rule still applies to an
+`agreements_required` with no text, no link or no token.
 
 #### Flow
 
@@ -670,16 +708,15 @@ call only.
   which is the silent acceptance that rule 4 forbids. It defaults to false, and no screen sets
   it, so no user loses a setting. *Built on the branch (2026-11-13).*
 - Add `options.consent` to `start_install` (§5.4, §4.2), and to `start_uninstall` if spike
-  question 3 permits it. In case (c) of the spike table, add neither. *Not built in case (c);
-  case (b), F4.*
+  question 3 permits it. In case (c) of the spike table, add neither. *Built, F4 (case (b)).*
 - Add the dialog data to the `agreements_required` error (§1.3) and `license_url` to
-  `PackageDetail` (§4.2). *The error data is built on the branch. `license_url` moves to F4,
-  case (b).*
+  `PackageDetail` (§4.2). *The error data is built on the branch. `license_url`, `agreement_text`, `agreement_url`,
+  `agreements` and `consent_token` are built in F4.*
 - Add the "winget needs an agreement" row of §6.7 to the code. *Built on the branch.*
 - Set the content security policy and add the text-only test of "Trust boundary". *The policy
   and its test are built on the branch. The text-only UI test is built (step 3).*
 - Add the consent dialog. The UI must read `error.code`; on the branch it reads only
-  `cancelled`. *Handler order built (step 3). No dialog in case (c); case (b), F4.*
+  `cancelled`. *Handler order built (step 3). The dialog is built in F4 (case (b)).*
 - Update the `winget-executor` skill (hard rules, command lines, test list, state notes) to
   this section, in the same pull request. *Done on the branch (2026-11-13).*
 
@@ -691,15 +728,15 @@ except where its last words say otherwise:
 |---|---|
 | `config.rs` | Remove the field and the test `default_has_agreements_off`. The test `modified_round_trips` drops the field and stays. |
 | `ipc/state.rs` | Stop the copy of the config value into the executor options. |
-| `executor/mod.rs` | `InstallRequest` carries the consent. If spike question 3 permits it, `PackageExecutor::remove` gets a request, so that a consent can reach it. `PackageExecutor::update` does not change. *Not in case (c); F4.* |
+| `executor/mod.rs` | `InstallRequest` carries the consent. If spike question 3 permits it, `PackageExecutor::remove` gets a request, so that a consent can reach it. `PackageExecutor::update` does not change. *Built, F4 (`RemoveRequest`, `VerifiedConsent`).* |
 | `executor/winget_cli.rs` | Remove `WingetOptions.accept_agreements`. Six argument builders read it today. After the change the install builder takes the flags from the request, and so does the remove builder if spike question 3 permits it. The builders with no consent in WP5 (`list_installed_args`, `list_updates_args`, `pin_args`, `update_args`) pass no flag. `finish()` writes an Info row, not an Error row, for `agreements_required`, and fills the dialog data of the error (§1.3). The function that stops the tree becomes a field of the executor, and the "cancel failed" event is added (§6.7 gap table). In case (c) no builder takes a consent. |
-| `services/install.rs`, `services/install/tests.rs` | `settle()` gets a case for `AgreementsRequired` before the general failure case, and the planned cancel rule for an uninstall. Update the table in the module comment. If spike question 3 permits it, `start_uninstall` takes the request and passes it to `remove`, and its calls in the tests change. *The request part is not in case (c); F4.* |
+| `services/install.rs`, `services/install/tests.rs` | `settle()` gets a case for `AgreementsRequired` before the general failure case, and the planned cancel rule for an uninstall. Update the table in the module comment. If spike question 3 permits it, `start_uninstall` takes the request and passes it to `remove`, and its calls in the tests change. *Built, F4; the check is in `services/consent.rs`.* |
 | `error.rs` | Serialize the two agreement fields and the dialog data (§1.3). |
-| `domain/package.rs`, `domain/progress.rs` | `license_url` on `PackageDetail` (*not built; F4, case (b)*). `cancel_failed` on `ProgressEvent`. |
-| `ipc/commands.rs`, `ipc/test_support.rs` | The `consent` option on the commands. `FakeExec` implements the changed trait. *Not in case (c); F4.* |
+| `domain/package.rs`, `domain/progress.rs` | `license_url` on `PackageDetail` (*built, F4*). `cancel_failed` on `ProgressEvent`. |
+| `ipc/commands.rs`, `ipc/test_support.rs` | The `consent` option on the commands. `FakeExec` implements the changed trait and records its requests. *Built, F4; also `open_agreement_link`.* |
 | `src-tauri/tauri.conf.json` | The content security policy. |
-| `ui/src/lib/api.ts`, `types.ts`, `operations.svelte.ts` | The option, the error fields, `license_url`, `cancel_failed`, the handler order. *Step 3; the option and `license_url` are F4.* |
-| `ui/src/components/ConsentDialog.svelte` | New. Not in case (c). *F4.* |
+| `ui/src/lib/api.ts`, `types.ts`, `operations.svelte.ts` | The option, the error fields, `license_url`, `cancel_failed`, the handler order. *Step 3; the option, `license_url` and `openAgreementLink` are built in F4.* |
+| `ui/src/components/ConsentDialog.svelte` | New. *Built, F4.* |
 | `src-tauri/tests/fixtures/fake_winget.rs` | Only if a new case needs it. The fake returns the two agreement exit codes today. |
 
 An update that needs an agreement ends with `agreements_required` in WP5, and the UI shows it
@@ -727,29 +764,45 @@ it applies. Status on 2026-11-13: the (a, b, c) tests outside `ui/` are built on
 (`agreements_required_carries_dialog_data_and_logs_info`,
 `agreements_required_on_remove_and_update_has_source_and_no_version`,
 `cancel_that_cannot_stop_the_tree_emits_one_cancel_failed_event`, `csp_policy.rs`); the (a, b)
-tests are F4; the UI tests are step 3:
+tests are built in F4 (list below; each names its test); the UI tests are step 3 and F4:
 
 - (a, b) An accepted retry passes only the accepted flags and `options.version`. This test
   runs against the subprocess fake (`tests/install_loop.rs`, `tests/executor_winget.rs`),
-  because `FakeExec` ignores its request.
+  because `FakeExec` ignores its request. *Built, F4:* `consented_operation_alone_passes_its_flags`
+  and `a_package_only_consent_gives_uninstall_no_flag` (`tests/executor_winget.rs`);
+  `accepted_retry_passes_only_the_accepted_kind_and_the_version`
+  (`services/install/tests.rs`; `FakeExec` now records its requests).
 - (a, b, c) A first `agreements_required` leaves the ledger in the rest state, writes an Info
   row, and its JSON carries the fields of §1.3.
 - (a, b) A version that is gone ends the attempt with the error that the exit code map gives.
+  *Built, F4:* `consented_retry_with_a_gone_version_ends_with_the_mapped_error`,
+  `a_failed_retry_ends_the_attempt_and_its_tokens`.
 - (a, b, c) No operation passes a flag with no consent. A call with no consent path (list,
-  pin, update) never passes a flag.
+  pin, update) never passes a flag. *Rewritten, F4:* `no_command_passes_an_agreement_flag`,
+  `no_builder_passes_an_agreement_flag_without_consent`, `guard_rejects_forbidden_flags`,
+  `consented_guard_lets_through_only_the_consented_flag_on_install_and_uninstall`.
 - (a, b) `start_install` with the kind `"package"` and no `options.version` returns
-  `invalid_config`.
-- (a, b) `start_uninstall` with the kind `"package"` returns `invalid_config`. Only if spike
-  question 3 gives uninstall a consent.
+  `invalid_config`. *Built, F4:* `package_kind_needs_a_version_and_unknown_kinds_fail`
+  (`services/consent.rs`).
+- (a, b) `start_uninstall` with the kind `"package"` returns `invalid_config`. *Built, F4:*
+  `uninstall_consent_is_source_only_and_bound`.
+- (a, b) A consent for another package, version, winget source or kind, or with no token, starts
+  nothing. *Built, F4:* `consent_is_bound_to_package_version_source_and_kind`,
+  `no_token_or_a_made_up_token_is_refused` (`services/consent.rs`);
+  `accepted_retry_passes_only_the_accepted_kind_and_the_version`;
+  `a_link_that_no_challenge_showed_does_not_open` (`ipc/tests.rs`).
 - (a, b, c) `tauri.conf.json` holds `script-src 'self'`. The test is the new file
   `src-tauri/tests/csp_policy.rs`.
-- UI tests (see the WP5 entry in §7 for when they can exist):
+- UI tests (see the WP5 entry in §7 for when they can exist; the (a, b) tests are built in F4,
+  `ui/src/components/ConsentDialog.test.ts`, each named like its line below):
   - (a, b, c) catalog text with markup appears as text;
   - (a, b, c) `agreements_required` with nothing to show gives the "no text" message and no
     dialog;
   - (a, b) `agreements_required` with a text or an approved link opens the dialog and shows
     no error;
-  - (a, b) "Decline" makes no call;
+  - (a, b) "Decline" makes no call; Accept sends the consent bound to the package and the
+    version of the error; the link opens only through `open_agreement_link`; the agreement
+    shows as text;
   - (a, b, c) an event with `cancel_failed` disables Cancel.
 
 ### 6.7 Install state transitions (WP5, built on branch)

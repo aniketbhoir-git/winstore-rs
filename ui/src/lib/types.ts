@@ -44,6 +44,8 @@ export interface PackageDetail {
   screenshots: string[]
   website: string | null
   license: string | null
+  /** https link to the license terms; show as text, open only through `openAgreementLink`. */
+  license_url?: string | null
   release_notes: string | null
   installer: {
     architecture: string | null
@@ -84,6 +86,25 @@ export interface AppError {
   package_agreements?: boolean
   version?: string | null
   winget_source?: string | null
+  /** Each agreement winget printed: label, text and https link (SPEC §6.6). Text only. */
+  agreements?: AgreementEntry[]
+  /** Binds a later consent to this package, version, winget source and kind (SPEC §6.6). */
+  consent_token?: string | null
+}
+
+export interface AgreementEntry {
+  label: string
+  text: string | null
+  url: string | null
+}
+
+export type AgreementKind = 'source' | 'package'
+
+/** The `options.consent` of `start_install` and `start_uninstall` (SPEC §4.2). */
+export interface Consent {
+  kinds: AgreementKind[]
+  /** The `consent_token` of each accepted `agreements_required` error. */
+  tokens: string[]
 }
 
 export interface ProgressEvent {
@@ -127,6 +148,12 @@ export interface UpdatesSummaryEvent {
 export interface InstallOptions {
   version?: string
   scope?: 'user' | 'machine'
+  consent?: Consent
+}
+
+/** `start_uninstall` takes a consent of the kind `source` only. */
+export interface UninstallOptions {
+  consent?: Consent
 }
 
 export type InstallState =

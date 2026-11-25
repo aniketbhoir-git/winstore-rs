@@ -1,6 +1,6 @@
 import type { AppError } from './types'
 
-/** SPEC §6.6, case (c): the shown text when winget needs an agreement the app cannot show. */
+/** SPEC §6.6 "no text" rule: the shown text when winget needs an agreement the app cannot show. */
 export const NO_AGREEMENT_TEXT =
   'The agreement text is not available. Store cannot install this package.'
 
@@ -19,6 +19,20 @@ export const READ_ONLY_AGREEMENT_TEXT =
 /** Text for an error of a read-only call (search, detail). Reads `error.code` only. */
 export function readOnlyErrorText(e: AppError): string {
   return e.code === 'agreements_required' ? READ_ONLY_AGREEMENT_TEXT : e.message
+}
+
+/**
+ * SPEC §6.6 step 3: an `agreements_required` error opens the consent dialog only when it has
+ * something to show (a text or a link) and a token that a consent can carry. Reads
+ * `error.code` and the fields, never the message text.
+ */
+export function hasAgreementDialog(e: AppError): boolean {
+  if (e.code !== 'agreements_required' || !e.consent_token) return false
+  return (
+    !!e.agreement_text ||
+    !!e.agreement_url ||
+    (e.agreements ?? []).some((a) => !!a.text || !!a.url)
+  )
 }
 
 /** The agreement link of an `agreements_required` error, to show as plain text; else null. */

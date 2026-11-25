@@ -1,7 +1,15 @@
 {
   "agreement_text": null,
   "agreement_url": "https://example.org/terms",
+  "agreements": [
+    {
+      "label": "Terms of use",
+      "text": null,
+      "url": "https://example.org/terms"
+    }
+  ],
   "code": "agreements_required",
+  "consent_token": "tok-0123456789abcdef",
   "detail": null,
   "message": "agreements must be accepted (source: false, package: true)",
   "package_agreements": true,

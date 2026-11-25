@@ -3,6 +3,7 @@
   import { operations } from '../lib/operations.svelte'
   import type { InstallStatus, PackageSummary } from '../lib/types'
   import BuyInStoreButton from './BuyInStoreButton.svelte'
+  import ConsentDialog from './ConsentDialog.svelte'
   import ProgressBar from './ProgressBar.svelte'
 
   let {
@@ -87,6 +88,16 @@
     {/if}
   {/if}
 </div>
+
+{#if op?.agreement}
+  <ConsentDialog
+    packageId={pkg.id}
+    packageName={pkg.name}
+    error={op.agreement}
+    onaccept={() => operations.acceptAgreement(pkg.id)}
+    ondecline={() => operations.declineAgreement(pkg.id)}
+  />
+{/if}
 
 <style>
   .actions {

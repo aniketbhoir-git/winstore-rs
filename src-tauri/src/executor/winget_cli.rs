@@ -22,7 +22,7 @@ use super::winget_parse::{
 };
 use super::{
     ExecFuture, InstallRequest, InstalledPackage, OpGuard, OpPermit, OperationHandle,
-    PackageExecutor,
+    PackageExecutor, RemoveRequest, VerifiedConsent,
 };
 use crate::db::repo::operation_log;
 use crate::db::DbPool;
@@ -30,7 +30,7 @@ use crate::domain::{
     now_unix, LogLevel, Operation, OperationLogEntry, OperationStage, PackageId, ProgressEvent,
     SourceKind, UpdateAvailable,
 };
-use crate::error::{AppError, AppResult};
+use crate::error::{AgreementEntry, AppError, AppResult};
 
 /// Env var that overrides discovery (tests and power users).
 pub const PATH_OVERRIDE_ENV: &str = "STORE_WINGET_PATH";
@@ -134,9 +134,12 @@ fn no_window(cmd: &mut Command) {
 // Argv builders (pure)
 // ---------------------------------------------------------------------------------------------
 
-/// Flags winget must never receive from this app. The two agreement flags are here because
-/// WP5 builds case (c) of SPEC §6.6: no operation passes one. The consent work (backlog F4)
-/// replaces that part of the guard.
+pub const SOURCE_AGREEMENT_FLAG: &str = "--accept-source-agreements";
+pub const PACKAGE_AGREEMENT_FLAG: &str = "--accept-package-agreements";
+
+/// Flags winget must never receive from this app without a consent. `--force` and
+/// `--ignore-security-hash` never pass. The two agreement flags pass only through
+/// `guard_args_consented` (SPEC §6.6 case (b)): one consented install or uninstall.
 pub const FORBIDDEN_FLAGS: [&str; 4] = [
     "--force",
     "--ignore-security-hash",
@@ -163,8 +166,9 @@ pub fn winget_target(package: &PackageId) -> AppResult<(String, &'static str)> {
     Ok((id, source))
 }
 
-/// No builder passes an agreement flag in any case (SPEC §6.6 case (c), hard rule 4): when
-/// winget needs an agreement it exits 0x8A150041 / 0x8A150046 and the operation fails.
+/// An agreement flag appears only when `req.consent` carries that kind (SPEC §6.6 case (b),
+/// hard rule 4); with no consent, winget exits 0x8A150041 / 0x8A150046 and the operation ends
+/// with `agreements_required`.
 pub fn install_args(id: &str, source: &str, req: &InstallRequest) -> Vec<String> {
     let mut a = s(&["install", "--id", id, "--exact", "--source", source]);
     if let Some(v) = &req.version {
@@ -178,6 +182,14 @@ pub fn install_args(id: &str, source: &str, req: &InstallRequest) -> Vec<String>
         "--disable-interactivity",
         "--verbose-logs",
     ]));
+    if let Some(c) = req.consent {
+        if c.source() {
+            a.push(SOURCE_AGREEMENT_FLAG.to_string());
+        }
+        if c.package() {
+            a.push(PACKAGE_AGREEMENT_FLAG.to_string());
+        }
+    }
     a
 }
 
@@ -191,9 +203,14 @@ pub fn update_args(id: &str, source: &str) -> Vec<String> {
     a
 }
 
-pub fn remove_args(id: &str, source: &str) -> Vec<String> {
+/// `winget uninstall` accepts the source agreement flag only (spike question 3): the package
+/// flag is never passed here, whatever the consent holds.
+pub fn remove_args(id: &str, source: &str, req: &RemoveRequest) -> Vec<String> {
     let mut a = s(&["uninstall", "--id", id, "--exact", "--source", source]);
     a.extend(s(&["--silent", "--disable-interactivity"]));
+    if req.consent.is_some_and(|c| c.source()) {
+        a.push(SOURCE_AGREEMENT_FLAG.to_string());
+    }
     a
 }
 
@@ -244,20 +261,51 @@ pub fn pin_args(id: &str, add: bool) -> Vec<String> {
     ])
 }
 
-/// Last line of defence: no code path may hand these flags to winget.
+/// Last line of defence for every call with no consent path: no forbidden flag, and no
+/// agreement flag, passes.
 pub fn guard_args(args: &[String]) -> AppResult<()> {
-    // Exact matches and the `--flag=value` form.
-    let forbidden = |a: &&String| {
-        FORBIDDEN_FLAGS
+    guard_args_consented(args, None)
+}
+
+/// The guard with the one exception of SPEC §6.6: an agreement flag passes when `consent`
+/// carries its kind, the command is `install` (both flags) or `uninstall` (the source flag
+/// only), the flag is a bare argument (never `--flag=value`) and it occurs once. `--force`
+/// and `--ignore-security-hash` never pass. Every other command, `upgrade`, `list`, `show`,
+/// `search` and `pin` included, refuses both agreement flags.
+pub fn guard_args_consented(args: &[String], consent: Option<&VerifiedConsent>) -> AppResult<()> {
+    let command = args.first().map(String::as_str);
+    let (mut seen_source, mut seen_package) = (false, false);
+    for a in args {
+        let named = FORBIDDEN_FLAGS
             .iter()
-            .any(|f| a.as_str() == *f || a.strip_prefix(f).is_some_and(|r| r.starts_with('=')))
-    };
-    match args.iter().find(forbidden) {
-        Some(bad) => Err(AppError::InvalidConfig(format!(
-            "refusing to pass {bad} to winget"
-        ))),
-        None => Ok(()),
+            .any(|f| a.as_str() == *f || a.strip_prefix(f).is_some_and(|r| r.starts_with('=')));
+        if !named {
+            continue;
+        }
+        let allowed = match a.as_str() {
+            SOURCE_AGREEMENT_FLAG => {
+                let ok = !seen_source
+                    && consent.is_some_and(|c| c.source())
+                    && matches!(command, Some("install" | "uninstall"));
+                seen_source = true;
+                ok
+            }
+            PACKAGE_AGREEMENT_FLAG => {
+                let ok = !seen_package
+                    && consent.is_some_and(|c| c.package())
+                    && command == Some("install");
+                seen_package = true;
+                ok
+            }
+            _ => false,
+        };
+        if !allowed {
+            return Err(AppError::InvalidConfig(format!(
+                "refusing to pass {a} to winget"
+            )));
+        }
     }
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -630,8 +678,8 @@ impl WingetCli {
         Ok(version)
     }
 
-    fn command(&self, args: &[String]) -> AppResult<Command> {
-        guard_args(args)?;
+    fn command(&self, args: &[String], consent: Option<&VerifiedConsent>) -> AppResult<Command> {
+        guard_args_consented(args, consent)?;
         let mut cmd = Command::new(&self.inner.path);
         cmd.args(args)
             .envs(self.inner.options.env.iter().map(|(k, v)| (k, v)))
@@ -643,8 +691,9 @@ impl WingetCli {
         Ok(cmd)
     }
 
+    /// Read-only calls: no consent path, so the strict guard applies.
     fn spawn(&self, args: &[String]) -> AppResult<Child> {
-        self.command(args)?.spawn().map_err(map_spawn_err)
+        self.command(args, None)?.spawn().map_err(map_spawn_err)
     }
 
     /// Runs a read-only call to its end or to `limit`. On the time limit the whole process
@@ -691,6 +740,7 @@ impl WingetCli {
 
     // -- operations -----------------------------------------------------------------------
 
+    #[allow(clippy::too_many_arguments)]
     async fn start_op(
         &self,
         package: &PackageId,
@@ -699,10 +749,11 @@ impl WingetCli {
         winget_source: &str,
         version: Option<String>,
         args: Vec<String>,
+        consent: Option<&VerifiedConsent>,
     ) -> AppResult<OperationHandle> {
-        guard_args(&args)?;
+        let mut cmd = self.command(&args, consent)?;
         let permit = self.inner.guard.try_acquire(package)?;
-        let mut child = self.spawn(&args)?;
+        let mut child = cmd.spawn().map_err(map_spawn_err)?;
         let job = ProcessJob::attach(&child);
         if job.is_none() {
             tracing::debug!("job object unavailable; cancel falls back to taskkill");
@@ -768,21 +819,34 @@ impl WingetCli {
             source,
             request.version.clone(),
             args,
+            request.consent.as_ref(),
         )
         .await
     }
 
-    pub async fn start_remove(&self, package: &PackageId) -> AppResult<OperationHandle> {
+    pub async fn start_remove(
+        &self,
+        package: &PackageId,
+        request: &RemoveRequest,
+    ) -> AppResult<OperationHandle> {
         let (id, source) = winget_target(package)?;
-        let args = remove_args(&id, source);
-        self.start_op(package, Operation::Remove, id, source, None, args)
-            .await
+        let args = remove_args(&id, source, request);
+        self.start_op(
+            package,
+            Operation::Remove,
+            id,
+            source,
+            None,
+            args,
+            request.consent.as_ref(),
+        )
+        .await
     }
 
     pub async fn start_update(&self, package: &PackageId) -> AppResult<OperationHandle> {
         let (id, source) = winget_target(package)?;
         let args = update_args(&id, source);
-        self.start_op(package, Operation::Update, id, source, None, args)
+        self.start_op(package, Operation::Update, id, source, None, args, None)
             .await
     }
 
@@ -935,6 +999,8 @@ impl Captured {
                 version,
                 agreement_text,
                 agreement_url,
+                agreements,
+                consent_token,
                 ..
             }) => Err(AppError::AgreementsRequired {
                 source_agreements,
@@ -943,6 +1009,8 @@ impl Captured {
                 version,
                 agreement_text,
                 agreement_url,
+                agreements,
+                consent_token,
             }),
             other => other,
         }
@@ -971,6 +1039,8 @@ struct Driven {
     fraction: f32,
     /// No bar was seen; a Failed or Cancelled terminal event keeps this value.
     indeterminate: bool,
+    /// The agreement block winget printed, if any.
+    agreements: Vec<AgreementEntry>,
 }
 
 async fn read_bounded(mut r: impl AsyncRead + Unpin) -> String {
@@ -1101,6 +1171,7 @@ where
             result: Err(AppError::Cancelled),
             fraction,
             indeterminate,
+            agreements: parser.agreements().to_vec(),
         };
     }
     let status = match status {
@@ -1110,6 +1181,7 @@ where
                 result: Err(AppError::Io(e)),
                 fraction,
                 indeterminate,
+                agreements: parser.agreements().to_vec(),
             }
         }
     };
@@ -1132,6 +1204,7 @@ where
         result,
         fraction,
         indeterminate,
+        agreements: parser.agreements().to_vec(),
     }
 }
 
@@ -1145,11 +1218,24 @@ async fn finish(
     if let Err(AppError::AgreementsRequired {
         winget_source,
         version,
+        agreement_text,
+        agreement_url,
+        agreements,
         ..
     }) = &mut driven.result
     {
         *winget_source = Some(ctx.winget_source.clone());
         *version = ctx.version.clone();
+        // The block winget printed (label, text, https link); `winget_parse` made every
+        // link safe. The two single fields carry the first link and all texts.
+        *agreement_url = driven.agreements.iter().find_map(|a| a.url.clone());
+        let texts: Vec<&str> = driven
+            .agreements
+            .iter()
+            .filter_map(|a| a.text.as_deref())
+            .collect();
+        *agreement_text = (!texts.is_empty()).then(|| texts.join("\n\n"));
+        *agreements = std::mem::take(&mut driven.agreements);
     }
     // Done is a measured 1.0; Failed and Cancelled keep the last fraction and its flag.
     let (stage, fraction, message, indeterminate) = match &driven.result {
@@ -1245,8 +1331,12 @@ impl PackageExecutor for WingetCli {
         })
     }
 
-    fn remove<'a>(&'a self, package: &'a PackageId) -> ExecFuture<'a, OperationHandle> {
-        Box::pin(self.start_remove(package))
+    fn remove<'a>(
+        &'a self,
+        package: &'a PackageId,
+        request: &'a RemoveRequest,
+    ) -> ExecFuture<'a, OperationHandle> {
+        Box::pin(self.start_remove(package, request))
     }
 
     fn list_installed<'a>(&'a self) -> ExecFuture<'a, Vec<InstalledPackage>> {
@@ -1297,6 +1387,7 @@ mod tests {
         let req = InstallRequest {
             version: Some("1.2.3".into()),
             scope: Some(InstallScope::User),
+            consent: None,
         };
         let a = install_args("Foo.Bar", "winget", &req);
         assert_eq!(
@@ -1321,12 +1412,12 @@ mod tests {
     }
 
     #[test]
-    fn no_builder_passes_an_agreement_flag() {
+    fn no_builder_passes_an_agreement_flag_without_consent() {
         let req = InstallRequest::default();
         let all = [
             install_args("A.B", "winget", &req),
             update_args("A.B", "winget"),
-            remove_args("A.B", "winget"),
+            remove_args("A.B", "winget", &RemoveRequest::default()),
             list_installed_args(),
             list_updates_args(),
             pin_args("A.B", true),
@@ -1343,7 +1434,7 @@ mod tests {
         let all = [
             install_args("A.B", "msstore", &InstallRequest::default()),
             update_args("A.B", "winget"),
-            remove_args("A.B", "winget"),
+            remove_args("A.B", "winget", &RemoveRequest::default()),
             list_installed_args(),
             list_updates_args(),
             pin_args("A.B", true),
@@ -1429,6 +1520,94 @@ mod tests {
             let eq = format!("{f}=x");
             assert!(guard_args(&["install".into(), eq]).is_err());
             assert!(guard_args(&["install".into(), format!("{f}-other")]).is_ok());
+        }
+    }
+
+    fn consent_req(source: bool, package: bool) -> InstallRequest {
+        InstallRequest {
+            consent: Some(VerifiedConsent::new(source, package)),
+            ..InstallRequest::default()
+        }
+    }
+
+    #[test]
+    fn install_builder_passes_exactly_the_consented_flags() {
+        let both = install_args("A.B", "winget", &consent_req(true, true));
+        assert!(has(&both, SOURCE_AGREEMENT_FLAG) && has(&both, PACKAGE_AGREEMENT_FLAG));
+        let only_src = install_args("A.B", "winget", &consent_req(true, false));
+        assert!(has(&only_src, SOURCE_AGREEMENT_FLAG) && !has(&only_src, PACKAGE_AGREEMENT_FLAG));
+        let only_pkg = install_args("A.B", "winget", &consent_req(false, true));
+        assert!(!has(&only_pkg, SOURCE_AGREEMENT_FLAG) && has(&only_pkg, PACKAGE_AGREEMENT_FLAG));
+        let empty = install_args("A.B", "winget", &consent_req(false, false));
+        assert!(!has(&empty, SOURCE_AGREEMENT_FLAG) && !has(&empty, PACKAGE_AGREEMENT_FLAG));
+        never_forbidden_but_agreements(&both);
+    }
+
+    fn never_forbidden_but_agreements(args: &[String]) {
+        assert!(!has(args, "--force") && !has(args, "--ignore-security-hash"));
+    }
+
+    #[test]
+    fn remove_builder_never_passes_the_package_flag() {
+        let all = RemoveRequest {
+            consent: Some(VerifiedConsent::new(true, true)),
+        };
+        let a = remove_args("A.B", "msstore", &all);
+        assert!(has(&a, SOURCE_AGREEMENT_FLAG));
+        assert!(!has(&a, PACKAGE_AGREEMENT_FLAG));
+        let pkg_only = RemoveRequest {
+            consent: Some(VerifiedConsent::new(false, true)),
+        };
+        let a = remove_args("A.B", "msstore", &pkg_only);
+        assert!(!has(&a, SOURCE_AGREEMENT_FLAG) && !has(&a, PACKAGE_AGREEMENT_FLAG));
+    }
+
+    #[test]
+    fn consented_guard_lets_through_only_the_consented_flag_on_install_and_uninstall() {
+        let v = |s: &[&str]| s.iter().map(|x| x.to_string()).collect::<Vec<_>>();
+        let src = VerifiedConsent::new(true, false);
+        let both = VerifiedConsent::new(true, true);
+        // consented flag on install and uninstall passes
+        assert!(guard_args_consented(&v(&["install", SOURCE_AGREEMENT_FLAG]), Some(&src)).is_ok());
+        assert!(
+            guard_args_consented(&v(&["uninstall", SOURCE_AGREEMENT_FLAG]), Some(&src)).is_ok()
+        );
+        assert!(
+            guard_args_consented(&v(&["install", PACKAGE_AGREEMENT_FLAG]), Some(&both)).is_ok()
+        );
+        // a kind that was not consented does not
+        assert!(
+            guard_args_consented(&v(&["install", PACKAGE_AGREEMENT_FLAG]), Some(&src)).is_err()
+        );
+        // no consent: nothing passes
+        for f in [SOURCE_AGREEMENT_FLAG, PACKAGE_AGREEMENT_FLAG] {
+            assert!(guard_args_consented(&v(&["install", f]), None).is_err());
+        }
+        // package flag on uninstall, and any flag on every other command, never
+        assert!(
+            guard_args_consented(&v(&["uninstall", PACKAGE_AGREEMENT_FLAG]), Some(&both)).is_err()
+        );
+        for cmd in ["upgrade", "list", "show", "search", "pin"] {
+            for f in [SOURCE_AGREEMENT_FLAG, PACKAGE_AGREEMENT_FLAG] {
+                assert!(
+                    guard_args_consented(&v(&[cmd, f]), Some(&both)).is_err(),
+                    "{cmd} {f}"
+                );
+            }
+        }
+        // twice, in the `=` form, and the hard-forbidden flags: never
+        assert!(guard_args_consented(
+            &v(&["install", SOURCE_AGREEMENT_FLAG, SOURCE_AGREEMENT_FLAG]),
+            Some(&both)
+        )
+        .is_err());
+        assert!(guard_args_consented(
+            &v(&["install", "--accept-source-agreements=true"]),
+            Some(&both)
+        )
+        .is_err());
+        for f in ["--force", "--ignore-security-hash"] {
+            assert!(guard_args_consented(&v(&["install", f]), Some(&both)).is_err());
         }
     }
 
