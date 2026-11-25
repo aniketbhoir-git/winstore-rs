@@ -11,4 +11,6 @@ fn manifest_pins_as_invoker() {
 #[test]
 fn manifest_keeps_the_tauri_default_dependency() {
     assert!(MANIFEST.contains("Microsoft.Windows.Common-Controls"));
+    assert!(MANIFEST.contains(r#"version="6.0.0.0""#));
+    assert!(MANIFEST.contains(r#"publicKeyToken="6595b64144ccf1df""#));
 }
