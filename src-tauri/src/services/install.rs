@@ -455,6 +455,7 @@ pub(crate) async fn drive(
             error: result.as_ref().err().map(error_json),
         },
     );
+    super::notify::operation_finished(core, id, op, &result).await;
     result
 }
 

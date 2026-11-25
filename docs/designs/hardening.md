@@ -137,8 +137,12 @@ is behind a trait, so a change to (a) touches one file (see "Decisions" 3).
      `app.store.desktop`. The code reads it from the Tauri config, not from a second constant.
    - **Shortcut.** Windows shows a toast of an unpackaged app only when a Start menu shortcut
      carries the same AppUserModelID. The Tauri NSIS template is expected to set it from the
-     bundle identifier. **Not verified**: the template and the MSI (WiX) template were not
-     read. Step 3 reads both and records the result in this section.
+     bundle identifier. **Read on 2026-11-25 (tauri-bundler, branch `dev`):** the NSIS template
+     sets the AppUserModelID of its Start menu and desktop shortcuts to `${BUNDLEID}` (macro
+     `SetLnkAppUserModelId`, `nsis/includes/shortcuts.nsh`), so the NSIS installer is the path
+     that shows toasts. The MSI (WiX) template `msi/main.wxs` sets no AppUserModelID on its
+     shortcuts; an MSI install is expected to fail the toast call, which ends as the Warn row
+     of rule 7. Not tested on an installed build.
    - **`windows` features.** Add `UI_Notifications` and `Data_Xml_Dom` to the `windows`
      dependency in `src-tauri/Cargo.toml`. No other crate.
    - **Activation.** The notifier registers an in-process `Activated` handler on each toast.
@@ -464,6 +468,7 @@ Each choice of taste takes the option that is easiest to reverse.
   `app.store.desktop` on the Start menu shortcut. Whether the Tauri NSIS and MSI templates
   set it was not checked. Activation after the app has closed is not designed. Check with
   the installed build.
+- That an MSI install shows no toast (the WiX template sets no AppUserModelID). Read, not run.
 - Whether `winget export` asks for a source agreement for the `winget` winget source. The
   real-winget check on a hosted runner records it with the fixture.
 

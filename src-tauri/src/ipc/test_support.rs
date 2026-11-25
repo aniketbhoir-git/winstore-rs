@@ -299,3 +299,23 @@ pub(crate) async fn wait_for(sink: &RecordingSink, event: &str) -> serde_json::V
     }
     panic!("event {event} never arrived");
 }
+
+/// Like `state_with` for the default source, with the given toast parts.
+pub(crate) async fn state_with_toasts(
+    factory: ExecutorFactory,
+    toasts: crate::platform::windows::ToastDeps,
+) -> (AppState, DbPool) {
+    let pool = db::init_memory_pool().await.unwrap();
+    db::run_migrations(&pool).await.unwrap();
+    let catalog = Catalog::new(
+        vec![Arc::new(FakeSource {
+            paid: false,
+            down: false,
+        })],
+        Some(pool.clone()),
+        3600,
+    );
+    let mut core = Core::new(pool.clone(), catalog, AppConfig::default(), factory);
+    core.toasts = toasts;
+    (AppState::with_core(core), pool)
+}

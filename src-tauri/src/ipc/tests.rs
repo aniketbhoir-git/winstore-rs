@@ -591,3 +591,93 @@ async fn a_stored_non_https_link_is_refused_before_the_browser() {
         assert_eq!(err.code(), "invalid_config", "{url}");
     }
 }
+
+// ---- Toast on finish (SPEC §6.9) ----
+
+use crate::platform::windows::{FakeNotifier, FakeWindowFocus, ToastDeps};
+
+/// Runs one scripted install to its end with the given focus value and setting; returns the
+/// toasts that the fake notifier recorded.
+async fn toasts_after_install(
+    focused: bool,
+    setting: Option<&str>,
+    result: crate::error::AppResult<()>,
+    notifier_fails: bool,
+) -> Vec<crate::platform::windows::Toast> {
+    use OperationStage::*;
+    let exec = FakeExec::scripted(vec![(vec![Resolving, Done], result)]);
+    let notifier = Arc::new(FakeNotifier::default());
+    notifier.fail.store(notifier_fails, Ordering::SeqCst);
+    let toasts = ToastDeps {
+        notifier: notifier.clone(),
+        focus: Arc::new(FakeWindowFocus(focused)),
+    };
+    let (state, pool) = state_with_toasts(exec_factory(exec), toasts).await;
+    if let Some(v) = setting {
+        crate::db::repo::settings::set(&pool, "notifications_enabled", v)
+            .await
+            .unwrap();
+    }
+    let sink = Arc::new(RecordingSink::default());
+    run_start_install(&state, sink.clone(), PKG, InstallOptions::default())
+        .await
+        .unwrap();
+    wait_for(&sink, EVENT_OPERATION_FINISHED).await;
+    // The toast follows the event; let the task end.
+    for _ in 0..50 {
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    notifier.toasts()
+}
+
+#[tokio::test]
+async fn unfocused_window_gets_one_toast_when_an_operation_ends() {
+    let t = toasts_after_install(false, None, Ok(()), false).await;
+    assert_eq!(t.len(), 1);
+    assert_eq!(t[0].title, "Install finished");
+    assert_eq!(t[0].body, "Foo.Bar was installed.");
+}
+
+#[tokio::test]
+async fn focused_window_gets_no_toast() {
+    assert!(toasts_after_install(true, None, Ok(()), false)
+        .await
+        .is_empty());
+}
+
+#[tokio::test]
+async fn setting_off_gets_no_toast() {
+    assert!(toasts_after_install(false, Some("false"), Ok(()), false)
+        .await
+        .is_empty());
+    assert_eq!(
+        toasts_after_install(false, Some("true"), Ok(()), false)
+            .await
+            .len(),
+        1
+    );
+}
+
+#[tokio::test]
+async fn failed_operation_toasts_and_cancel_does_not() {
+    let t = toasts_after_install(
+        false,
+        None,
+        Err(AppError::DeploymentFailed("x".into())),
+        false,
+    )
+    .await;
+    assert_eq!(t.len(), 1);
+    assert_eq!(t[0].title, "Install failed");
+    assert!(
+        toasts_after_install(false, None, Err(AppError::Cancelled), false)
+            .await
+            .is_empty()
+    );
+}
+
+#[tokio::test]
+async fn a_failing_notifier_does_not_fail_the_operation() {
+    let t = toasts_after_install(false, None, Ok(()), true).await;
+    assert!(t.is_empty());
+}
