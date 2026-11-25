@@ -661,6 +661,24 @@ async fn list_installed_parses_table() {
 }
 
 #[tokio::test]
+async fn list_installed_one_filters_by_exact_id_and_never_passes_an_agreement_flag() {
+    let fx = Fx::new(LIST_TABLE);
+    let rows = fx.cli.list_installed_one("7zip.7zip").await.unwrap();
+    assert_eq!(rows.len(), 3);
+    assert_eq!(
+        fx.last_argv(),
+        [
+            "list",
+            "--id",
+            "7zip.7zip",
+            "--exact",
+            "--disable-interactivity"
+        ]
+    );
+    assert!(accept_flags(&fx.last_argv()).is_empty());
+}
+
+#[tokio::test]
 async fn list_installed_with_no_match_is_empty() {
     let fx = Fx::new("out No installed package found matching input criteria.\nexit 0x8A150014\n");
     assert!(fx.cli.list_installed().await.unwrap().is_empty());

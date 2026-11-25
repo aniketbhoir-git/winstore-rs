@@ -37,7 +37,9 @@ pub const PATH_OVERRIDE_ENV: &str = "STORE_WINGET_PATH";
 
 const CAPTURE_TIMEOUT: Duration = Duration::from_secs(120);
 /// Limit of `winget list`; the install service waits for it after each success (SPEC §6.7).
-const LIST_TIMEOUT: Duration = Duration::from_secs(30);
+const LIST_TIMEOUT: Duration = Duration::from_secs(120);
+/// The `winget list` call narrowed to one package id.
+const LIST_ONE_TIMEOUT: Duration = Duration::from_secs(30);
 const PROBE_TIMEOUT: Duration = Duration::from_secs(15);
 /// Time limit of one `winget search` call (design catalog-winget-cli, section 2).
 pub const SEARCH_TIMEOUT: Duration = Duration::from_secs(15);
@@ -218,6 +220,11 @@ pub fn list_installed_args() -> Vec<String> {
     s(&["list", "--disable-interactivity"])
 }
 
+/// `winget list` narrowed to one package id (exact match, any source). Never an agreement flag.
+pub fn list_installed_one_args(id: &str) -> Vec<String> {
+    s(&["list", "--id", id, "--exact", "--disable-interactivity"])
+}
+
 pub fn list_updates_args() -> Vec<String> {
     s(&["upgrade", "--include-unknown", "--disable-interactivity"])
 }
@@ -276,6 +283,8 @@ pub fn guard_args_consented(args: &[String], consent: Option<&VerifiedConsent>) 
     let command = args.first().map(String::as_str);
     let (mut seen_source, mut seen_package) = (false, false);
     for a in args {
+        // winget flag names are case-insensitive: compare in lower case.
+        let lower = a.to_ascii_lowercase();
         let named = FORBIDDEN_FLAGS
             .iter()
             .any(|f| lower == *f || lower.strip_prefix(f).is_some_and(|r| r.starts_with('=')));
@@ -283,8 +292,6 @@ pub fn guard_args_consented(args: &[String], consent: Option<&VerifiedConsent>) 
             continue;
         }
         let allowed = match lower.as_str() {
-        // winget flag names are case-insensitive: compare in lower case.
-        let lower = a.to_ascii_lowercase();
             SOURCE_AGREEMENT_FLAG => {
                 let ok = !seen_source
                     && consent.is_some_and(|c| c.source())
@@ -896,8 +903,22 @@ impl WingetCli {
     }
 
     pub async fn query_installed(&self) -> AppResult<Vec<InstalledPackage>> {
-        let args = list_installed_args();
-        let out = self.run_capture_timeout(&args, LIST_TIMEOUT).await?;
+        self.query_installed_with(list_installed_args(), LIST_TIMEOUT)
+            .await
+    }
+
+    /// `winget list --id <id> --exact`: the rows of one package, with the short limit.
+    pub async fn query_installed_one(&self, id: &str) -> AppResult<Vec<InstalledPackage>> {
+        self.query_installed_with(list_installed_one_args(id), LIST_ONE_TIMEOUT)
+            .await
+    }
+
+    async fn query_installed_with(
+        &self,
+        args: Vec<String>,
+        limit: Duration,
+    ) -> AppResult<Vec<InstalledPackage>> {
+        let out = self.run_capture_timeout(&args, limit).await?;
         if out.code as u32 == EXIT_NO_APPLICATIONS_FOUND {
             return Ok(Vec::new());
         }
@@ -1345,6 +1366,10 @@ impl PackageExecutor for WingetCli {
         Box::pin(self.query_installed())
     }
 
+    fn list_installed_one<'a>(&'a self, id: &'a str) -> ExecFuture<'a, Vec<InstalledPackage>> {
+        Box::pin(self.query_installed_one(id))
+    }
+
     fn list_updates<'a>(&'a self) -> ExecFuture<'a, Vec<UpdateAvailable>> {
         Box::pin(self.query_updates())
     }
@@ -1525,6 +1550,23 @@ mod tests {
         }
     }
 
+    #[test]
+    fn guard_compares_flag_names_case_insensitively() {
+        for f in [
+            "--Accept-Package-Agreements",
+            "--ACCEPT-SOURCE-AGREEMENTS",
+            "--FORCE",
+            "--Ignore-Security-Hash",
+            "--Force=1",
+        ] {
+            assert!(guard_args(&["install".into(), f.into()]).is_err(), "{f}");
+            assert!(
+                guard_args_consented(&["install".into(), f.into()], None).is_err(),
+                "{f}"
+            );
+        }
+    }
+
     fn consent_req(source: bool, package: bool) -> InstallRequest {
         InstallRequest {
             consent: Some(VerifiedConsent::new(source, package)),
@@ -1550,23 +1592,6 @@ mod tests {
     }
 
     #[test]
-    #[test]
-    fn guard_compares_flag_names_case_insensitively() {
-        for f in [
-            "--Accept-Package-Agreements",
-            "--ACCEPT-SOURCE-AGREEMENTS",
-            "--FORCE",
-            "--Ignore-Security-Hash",
-            "--Force=1",
-        ] {
-            assert!(guard_args(&["install".into(), f.into()]).is_err(), "{f}");
-            assert!(
-                guard_args_consented(&["install".into(), f.into()], None).is_err(),
-                "{f}"
-            );
-        }
-    }
-
     fn remove_builder_never_passes_the_package_flag() {
         let all = RemoveRequest {
             consent: Some(VerifiedConsent::new(true, true)),

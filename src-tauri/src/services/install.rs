@@ -453,9 +453,10 @@ async fn installed_version_or(
     target: Option<String>,
 ) -> Option<String> {
     let native = PackageId::parse(id.as_str()).map(|(_, n)| n).ok();
-    let listed = match core.executor().await {
-        Ok(executor) => executor.list_installed().await,
-        Err(e) => Err(e),
+    let listed = match (core.executor().await, &native) {
+        (Ok(executor), Some(n)) => executor.list_installed_one(n).await,
+        (Ok(_), None) => Ok(Vec::new()),
+        (Err(e), _) => Err(e),
     };
     let found = match (&listed, &native) {
         (Ok(rows), Some(n)) => rows

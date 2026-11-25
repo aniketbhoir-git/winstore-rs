@@ -726,10 +726,22 @@ async fn install_records_the_version_from_winget_list() {
     // The id case differs on purpose; the catalog version is 1.2.3.
     *exec.installed.lock().unwrap() =
         vec![listed("other.app", "9.9"), listed("foo.bar", "1.2.3.4")];
+    let exec2 = exec.clone();
     let (pool, log) = install_ok(exec).await;
     let rec = ledger(&pool).await;
     assert_eq!(rec.state, InstallState::Installed);
     assert_eq!(rec.installed_version.as_deref(), Some("1.2.3.4"));
+    // The post-install call is the narrowed one; the full list is for the Library.
+    assert_eq!(
+        exec2
+            .list_one_calls
+            .load(std::sync::atomic::Ordering::SeqCst),
+        1
+    );
+    assert_eq!(
+        exec2.list_calls.load(std::sync::atomic::Ordering::SeqCst),
+        0
+    );
     assert!(log
         .iter()
         .any(|e| e.level == LogLevel::Warn && e.message.contains("differs")));
@@ -789,6 +801,11 @@ async fn failed_install_does_not_read_winget_list() {
     assert_eq!(finished(&sink, 1).await["ok"], false);
     assert_eq!(ledger(&pool).await.installed_version, None);
     assert_eq!(exec.list_calls.load(std::sync::atomic::Ordering::SeqCst), 0);
+    assert_eq!(
+        exec.list_one_calls
+            .load(std::sync::atomic::Ordering::SeqCst),
+        0
+    );
 }
 
 #[tokio::test]
