@@ -17,6 +17,9 @@
 //!                `FAKE_WINGET_CHILD_PID` (a process-tree test)
 //! `outfile PATH` copy the file at PATH to the path after `-o` in the arguments (what
 //!                `winget export -o <file>` writes); no `-o` is a panic
+//! `listrow ID TEXT`  print TEXT like `out`, but only when the row's ID matches the
+//!                `--id` argument the way winget does: with `--exact` the same case, without it
+//!                a case-insensitive substring; no `--id` prints every row
 //! `exit CODE`    exit with CODE (decimal or 0x hex; u32 HRESULTs allowed)
 //! ```
 //!
@@ -99,6 +102,21 @@ fn main() {
                 let mut o = stdout.lock();
                 write!(o, "{}\r\n", unescape(rest)).unwrap();
                 o.flush().unwrap();
+            }
+            "listrow" => {
+                let (id, text) = rest.split_once(' ').unwrap_or((rest, ""));
+                let want = args.iter().position(|a| a == "--id").map(|i| &args[i + 1]);
+                let exact = args.iter().any(|a| a == "--exact" || a == "-e");
+                let show = match want {
+                    None => true,
+                    Some(w) if exact => id == w,
+                    Some(w) => id.to_lowercase().contains(&w.to_lowercase()),
+                };
+                if show {
+                    let mut o = stdout.lock();
+                    write!(o, "{}\r\n", unescape(text)).unwrap();
+                    o.flush().unwrap();
+                }
             }
             "raw" => {
                 let mut o = stdout.lock();
