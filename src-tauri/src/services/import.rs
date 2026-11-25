@@ -125,12 +125,13 @@ pub fn read_limited_file(file: std::fs::File) -> AppResult<Vec<u8>> {
     Ok(buf)
 }
 
-/// Pure string check, run before any filesystem call on a path from the webview: only an
-/// absolute local drive path (`C:\dir\file`, `C:/dir/file`) passes. A UNC path, a device path
-/// (`\\.\`, `\\?\`, `\\?\UNC\`), a relative or drive-relative path (`C:file`), a doubled
-/// separator, a second `:` (an alternate data stream) and a NUL all fail. Resolving such a
-/// path can open a network or pipe connection (NTLM hash leak), so the core never calls
-/// `canonicalize` on it.
+/// Pure string check, run before any filesystem call on a path from the webview. It passes
+/// only a string of the form `<letter>:`, then `\` or `/`, then a first character that is not
+/// a separator (`C:\dir\file`, `C:/dir/file`), with no further `:` and no NUL. So a UNC path
+/// (`\\host\share`), a device path (`\\.\`, `\\?\`), a relative or drive-relative path
+/// (`C:file`), an alternate data stream and a NUL all fail. Resolving such a path can open a
+/// network or pipe connection (NTLM hash leak), so the core never calls `canonicalize` on it.
+/// It does not look at the drive type or at device names; see `has_reserved_device_name`.
 pub fn is_local_drive_path(requested: &str) -> bool {
     let b = requested.as_bytes();
     let sep = |c: u8| c == b'\\' || c == b'/';
@@ -140,6 +141,48 @@ pub fn is_local_drive_path(requested: &str) -> bool {
         && sep(b[2])
         && !sep(b[3])
         && !requested[2..].contains([':', '\0'])
+}
+
+/// Pure string check: true when any component of `requested` is a Windows reserved device name
+/// (`CON`, `PRN`, `AUX`, `NUL`, `CONIN$`, `CONOUT$`, `COM0-9`, `LPT0-9` and the superscript
+/// forms `COM¹²³`, `LPT¹²³`). Case-insensitive. A trailing dot or space and any extension
+/// (`NUL.json`, `nul .txt`, `NUL...`) do not hide the name: Windows resolves them to the device.
+pub fn has_reserved_device_name(requested: &str) -> bool {
+    requested.split(['\\', '/']).any(|comp| {
+        let stem = comp.split('.').next().unwrap_or("").trim_end_matches(' ');
+        let up = stem.to_uppercase();
+        match up.as_str() {
+            "CON" | "PRN" | "AUX" | "NUL" | "CONIN$" | "CONOUT$" => true,
+            _ => {
+                let rest = up.strip_prefix("COM").or_else(|| up.strip_prefix("LPT"));
+                let mut it = rest.into_iter().flat_map(str::chars);
+                matches!(
+                    (it.next(), it.next()),
+                    (Some('0'..='9' | '\u{b9}' | '\u{b2}' | '\u{b3}'), None)
+                )
+            }
+        }
+    })
+}
+
+/// Asks the OS whether the drive of `requested` (a string that passed `is_local_drive_path`)
+/// is a network drive. A drive type call does not open the path. On any other platform: false.
+#[cfg(windows)]
+fn drive_is_remote(requested: &str) -> bool {
+    use windows::Win32::Storage::FileSystem::GetDriveTypeW;
+    /// `DRIVE_REMOTE` from `fileapi.h`; the `windows` crate keeps it in another feature.
+    const DRIVE_REMOTE: u32 = 4;
+    let Some(letter) = requested.chars().next() else {
+        return false;
+    };
+    let root: Vec<u16> = format!("{letter}:\\").encode_utf16().chain([0]).collect();
+    // SAFETY: `root` is a NUL-terminated UTF-16 string that outlives the call.
+    unsafe { GetDriveTypeW(windows::core::PCWSTR(root.as_ptr())) == DRIVE_REMOTE }
+}
+
+#[cfg(not(windows))]
+fn drive_is_remote(_requested: &str) -> bool {
+    false
 }
 
 /// Opens `canon` (already canonical) once and checks the handle, not the path: the open does
@@ -263,10 +306,21 @@ impl ImportPaths {
         Some(canon)
     }
 
-    /// Canonicalises `requested` and allows it when it was dropped, or when it is a `.json`
+    /// Refuses a non-local-drive string, a device name and a network drive, then canonicalises
+    /// `requested` and allows it when it was dropped, or when it is a `.json`
     /// file whose parent is the canonical exports folder. Otherwise `invalid_config`, and the
     /// caller does not open the file.
     pub fn resolve(&self, requested: &str, exports_dir: &Path) -> AppResult<PathBuf> {
+        self.resolve_with(requested, exports_dir, drive_is_remote)
+    }
+
+    /// `resolve` with the network-drive check passed in, so a test needs no network drive.
+    fn resolve_with(
+        &self,
+        requested: &str,
+        exports_dir: &Path,
+        is_remote: fn(&str) -> bool,
+    ) -> AppResult<PathBuf> {
         let denied = || invalid("this file cannot be read here; drop it on the window instead");
         // A recorded drop path (canonical, often `\?\C:\...`) matches by string, no disk call.
         let recorded = self
@@ -280,7 +334,10 @@ impl ImportPaths {
             return Ok(p);
         }
         // Before any filesystem call: `canonicalize` on a UNC or device path connects out.
-        if !is_local_drive_path(requested) {
+        if !is_local_drive_path(requested)
+            || has_reserved_device_name(requested)
+            || is_remote(requested)
+        {
             return Err(denied());
         }
         let canon = std::fs::canonicalize(requested).map_err(|_| denied())?;
@@ -478,10 +535,8 @@ mod tests {
     }
 
     #[test]
-    fn network_and_device_paths_are_refused_before_the_disk() {
-        let fx = fx();
-        // The exports folder does not exist: only the string check can have refused these.
-        let missing = fx.dir.path().join("none");
+    fn network_and_device_paths_fail_the_string_check() {
+        // Pure string check: no `resolve` call, so no path here can reach the network.
         for bad in [
             "\\\\host\\share\\x.json",
             "\\\\?\\UNC\\host\\share\\x.json",
@@ -490,9 +545,64 @@ mod tests {
             "x.json",
             "..\\x.json",
         ] {
+            assert!(!is_local_drive_path(bad), "{bad}");
+        }
+    }
+
+    #[test]
+    fn reserved_device_names_are_found_in_any_component() {
+        for bad in [
+            "C:\\NUL",
+            "C:\\a\\nul.json",
+            "C:\\a\\Con\\x.json",
+            "C:/a/PRN.txt",
+            "C:\\AUX.tar.gz",
+            "C:\\com1.json",
+            "C:\\COM0",
+            "C:\\lpt9.json",
+            "C:\\NUL.",
+            "C:\\NUL ",
+            "C:\\NUL .json",
+            "C:\\NUL...json",
+            "C:\\COM\u{b9}",
+            "C:\\lpt\u{b2}.txt",
+            "C:\\COM\u{b3}.json",
+            "C:\\CONIN$",
+            "C:\\CONOUT$.x",
+        ] {
+            assert!(has_reserved_device_name(bad), "{bad:?}");
+        }
+        for ok in [
+            "C:\\a\\b.json",
+            "C:\\console.json",
+            "C:\\COM10.json",
+            "C:\\COMX",
+            "C:\\nulx\\a.json",
+            "C:\\a.nul",
+            "C:\\LPT",
+        ] {
+            assert!(!has_reserved_device_name(ok), "{ok:?}");
+        }
+    }
+
+    #[test]
+    fn resolve_refuses_device_names_and_remote_drives_before_the_disk() {
+        let fx = fx();
+        // Nothing here exists: only the string and drive checks can have refused these.
+        let missing = fx.dir.path().join("none");
+        for bad in ["C:\\a\\NUL.json", "C:\\COM1", "C:\\x\\lpt\u{b9}.json"] {
             let err = fx.paths.resolve(bad, &missing).unwrap_err();
             assert!(matches!(err, AppError::InvalidConfig(_)), "{bad}");
         }
+        // A fake drive type that says "remote" refuses an otherwise fine local path.
+        let ok = put(&fx.exports, "store-export-2026-11-25.json");
+        let s = ok.display().to_string();
+        assert!(fx.paths.resolve_with(&s, &fx.exports, |_| false).is_ok());
+        let err = fx
+            .paths
+            .resolve_with(&s, &fx.exports, |_| true)
+            .unwrap_err();
+        assert!(matches!(err, AppError::InvalidConfig(_)));
     }
 
     #[test]

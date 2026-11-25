@@ -1123,7 +1123,7 @@ nothing kept; an oversized temp file; a second export replaces the file);
 
 1. **Path.** *String check first:* `is_local_drive_path()` (a pure function, no disk access)
    refuses anything but an absolute local drive path (`C:\dir\file`): a UNC path, a device
-   path (`\\.\`, `\\?\`, `\\?\UNC\`), a relative or drive-relative path, a second `:`, a NUL. It runs
+   path (`\\.\`, `\\?\`, `\\?\UNC\`), a relative or drive-relative path, a second `:`, a NUL. `has_reserved_device_name()` (also pure) refuses a Windows reserved device name in any component (`CON`, `PRN`, `AUX`, `NUL`, `CONIN$`, `CONOUT$`, `COM0-9`, `LPT0-9`, the superscript `¹²³` forms), case-insensitive, with or without an extension, trailing dots or spaces. `GetDriveTypeW` refuses a drive whose type is `DRIVE_REMOTE` (a mapped network drive; no path I/O; it is passed in as a function so tests use a fake). All three run
    before `canonicalize` (a string equal to a recorded drop path, which is canonical and may start with `\\?\`, is matched first, with no disk call), because resolving a network or pipe path connects out (NTLM hash
    leak). Then the core opens a path only in two cases. *Dropped:* the main window's
    `DragDropEvent::Drop` is handled in Rust (`lib.rs`); each dropped path is canonicalised and,
