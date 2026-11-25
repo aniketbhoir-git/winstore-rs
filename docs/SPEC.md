@@ -296,6 +296,7 @@ src-tauri/
       upgrade.rs       # WP6: update scan, update one/all
       library.rs       # WP6: installed app list
       schedule.rs      # WP11: scheduled update scan
+      export.rs        # WP11 step 5: export of the installed packages (built on branch)
     ipc/
       commands.rs      # every #[tauri::command] handler
       events.rs        # event names + payload types
@@ -437,6 +438,8 @@ All handlers are in `ipc/commands.rs`. Each one wraps a plain async function tha
 | `check_updates` | none | `Vec<UpdateAvailable>` | Read-only list (§6.3). Does not write the ledger. |
 | `update_all` | none | `UpdatesSummaryEvent` | Sequential updates with progress. The command exists; WP6 adds its UI and finishes its behavior (§6.3). |
 | `open_store_page` | `product_id` | nothing | Checks the id, then opens the official product page in the browser. |
+| `export_packages` | none | `ExportResult { path, file_name, package_count }` | Runs `winget export -o <temp> --source winget --disable-interactivity`, checks the file, copies it to `Documents\Store\exports\store-export-<date>.json` (*built on branch, WP11 step 5*; §6.11). Never an agreement flag; `agreements_required` writes nothing. |
+| `open_exports_folder` | none | nothing | Creates the exports folder if needed and opens it in the file manager (*built on branch, WP11 step 5*). The path is the core's own. |
 | `start_server` | `port` | error `unsupported` | Stub until WP10. |
 
 Not built: pin and unpin commands, a library list, settings read and write, source enable and
@@ -1027,6 +1030,33 @@ is deferred (§2.1, review action A9). No item has a flow in §6. Before code, W
 flow for each item, with criteria that a test can decide. The import flow must show how one
 user click for a list of packages satisfies hard rule 4.
 *Accept:* not defined; see above.
+
+### 6.11 Import and export (WP11; the export is built on branch, step 5; the import is planned)
+
+Design: `docs/designs/hardening.md` §4. The file is winget's own JSON format (`Sources`, each
+with `SourceDetails` and `Packages`), so plain winget reads a file that Store writes.
+
+**Export** (*built on branch*). `export_packages`:
+
+1. `WingetCli` runs `winget export -o <temp file> --source winget --disable-interactivity`
+   (`export_args()`, checked by `guard_args()`). It passes no agreement flag, although winget
+   accepts one on export. A source agreement ends the call with `agreements_required`; nothing
+   is written.
+2. The command lists the installed packages that the `winget` winget source knows, not only
+   the packages that Store installed. It changes nothing on the system.
+3. `services/export.rs` checks the temp file (UTF-8, at most 1 MiB, `Sources[].Packages[]`
+   with a non-empty `PackageIdentifier`). When it passes, the file is written to
+   `Documents\Store\exports\store-export-<date>.json` (UTC date; a second export on the same
+   day replaces the file). Otherwise the command returns `winget_failed` and keeps no file. The
+   temp file is removed in every case. Step 6 replaces this check with the import parser.
+4. No `--include-versions`: an import installs the latest version.
+5. The UI ("Export installed apps" in the header) shows the file name, the count and the path
+   as text, with an "Open folder" button (`open_exports_folder`). No file dialog (design
+   "Decisions" 9).
+
+*Tests:* `export_args_have_no_agreement_flag` (`executor/winget_cli.rs`);
+`tests/import_export.rs` (`outfile` directive of the fake: copy, bad file, no file, source
+agreement); `ui/src/components/ExportPanel.test.ts`.
 
 ---
 

@@ -225,6 +225,16 @@ pub fn list_installed_one_args(id: &str) -> Vec<String> {
     s(&["list", "--id", id, "--exact", "--disable-interactivity"])
 }
 
+/// `winget export` of the installed packages that the `winget` source knows, to `path`
+/// (hardening design §4). Read-only on the system. Never an agreement flag, although winget
+/// accepts one here; a source agreement comes back as `agreements_required`.
+pub fn export_args(path: &Path) -> Vec<String> {
+    let mut a = s(&["export", "-o"]);
+    a.push(path.display().to_string());
+    a.extend(s(&["--source", "winget", "--disable-interactivity"]));
+    a
+}
+
 pub fn list_updates_args() -> Vec<String> {
     s(&["upgrade", "--include-unknown", "--disable-interactivity"])
 }
@@ -940,6 +950,12 @@ impl WingetCli {
             .collect())
     }
 
+    /// Runs `winget export` into `path`. The caller owns the file and checks its content.
+    pub async fn export_installed(&self, path: &Path) -> AppResult<()> {
+        let out = self.run_capture(&export_args(path)).await?;
+        out.require_catalog_ok("export")
+    }
+
     pub async fn query_updates(&self) -> AppResult<Vec<UpdateAvailable>> {
         let args = list_updates_args();
         let out = self.run_capture(&args).await?;
@@ -1378,6 +1394,10 @@ impl PackageExecutor for WingetCli {
         Box::pin(self.start_update(package))
     }
 
+    fn export_installed<'a>(&'a self, path: &'a Path) -> ExecFuture<'a, ()> {
+        Box::pin(WingetCli::export_installed(self, path))
+    }
+
     fn pin<'a>(&'a self, package: &'a PackageId) -> ExecFuture<'a, ()> {
         Box::pin(self.set_pin(package, true))
     }
@@ -1477,6 +1497,30 @@ mod tests {
         assert!(has(&all[3], "--disable-interactivity") && has(&all[4], "--include-unknown"));
         assert_eq!(all[5][..3], ["pin", "add", "--id"]);
         assert_eq!(all[6][1], "remove");
+    }
+
+    #[test]
+    fn export_args_have_no_agreement_flag() {
+        let a = export_args(Path::new("out.json"));
+        assert_eq!(
+            a,
+            s(&[
+                "export",
+                "-o",
+                "out.json",
+                "--source",
+                "winget",
+                "--disable-interactivity"
+            ])
+        );
+        guard_args(&a).unwrap();
+        assert!(a.iter().all(|x| !x.contains("accept")));
+        // The guard refuses an agreement flag on export, whoever adds it.
+        for f in FORBIDDEN_FLAGS {
+            let mut b = a.clone();
+            b.push(f.to_string());
+            assert!(guard_args(&b).is_err(), "{f}");
+        }
     }
 
     #[test]

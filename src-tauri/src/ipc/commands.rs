@@ -21,6 +21,7 @@ use crate::error::{AppError, AppResult};
 use crate::executor::winget_parse::safe_https_url;
 use crate::executor::{InstallRequest, InstallScope};
 use crate::services::consent::Consent;
+use crate::services::export::{self, ExportResult};
 pub use crate::services::install::OperationStarted;
 use crate::services::install::{self, InstallStatus};
 
@@ -418,6 +419,44 @@ pub async fn get_operation_log(
 #[tauri::command]
 pub async fn check_updates(state: State<'_, AppState>) -> Result<Vec<UpdateAvailable>, AppError> {
     run_check_updates(&state).await
+}
+
+/// Hardening design §4: exports the installed packages to winget's JSON format in the exports
+/// folder. Read-only on the system; never an agreement flag.
+pub async fn run_export_packages(state: &AppState) -> AppResult<ExportResult> {
+    let core = state.core().await?;
+    let executor = core.executor().await?;
+    export::export_installed(&*executor, &export::exports_dir()?, &export::today()).await
+}
+
+/// Opens the exports folder (created when missing) in the file manager.
+#[cfg(windows)]
+pub fn run_open_exports_folder() -> AppResult<()> {
+    let dir = export::exports_dir()?;
+    std::fs::create_dir_all(&dir)?;
+    // Argument vector, no shell; the path comes from the core, never from the webview.
+    std::process::Command::new("explorer")
+        .arg(&dir)
+        .spawn()
+        .map(|_| ())
+        .map_err(AppError::Io)
+}
+
+#[cfg(not(windows))]
+pub fn run_open_exports_folder() -> AppResult<()> {
+    Err(AppError::Unsupported(
+        "opening a folder is only supported on Windows".into(),
+    ))
+}
+
+#[tauri::command]
+pub async fn export_packages(state: State<'_, AppState>) -> Result<ExportResult, AppError> {
+    run_export_packages(&state).await
+}
+
+#[tauri::command]
+pub fn open_exports_folder() -> Result<(), AppError> {
+    run_open_exports_folder()
 }
 
 #[tauri::command]
