@@ -1053,3 +1053,37 @@ async fn an_update_gets_no_consent_token() {
         other => panic!("{other:?}"),
     }
 }
+
+#[tokio::test]
+async fn a_failed_retry_ends_the_attempt_and_its_tokens() {
+    let exec = Arc::new(FakeExec::scripted(vec![
+        (
+            vec![OperationStage::Failed],
+            Err(agreements(false, Some("1.2.3"))),
+        ),
+        (
+            vec![OperationStage::Failed],
+            Err(AppError::WingetFailed {
+                code: -1978335209,
+                stderr: "No version found matching: 1.2.3".into(),
+            }),
+        ),
+    ]));
+    let (core, _pool, sink) = setup(exec.clone()).await;
+    start_install(&core, sink_of(&sink), id(), versioned("1.2.3"))
+        .await
+        .unwrap();
+    let t = token_of(&finished(&sink, 1).await);
+    let c = consent_of(&["package"], &[&t]);
+    start_install_with_consent(&core, sink_of(&sink), id(), versioned("1.2.3"), Some(&c))
+        .await
+        .unwrap();
+    let fin = finished(&sink, 2).await;
+    assert_eq!(fin["error"]["code"], "winget_failed");
+    // The attempt is over; the same consent opens nothing.
+    let err = start_install_with_consent(&core, sink_of(&sink), id(), versioned("1.2.3"), Some(&c))
+        .await
+        .unwrap_err();
+    assert_eq!(err.code(), "invalid_config");
+    assert_eq!(exec.install_requests.lock().unwrap().len(), 2);
+}

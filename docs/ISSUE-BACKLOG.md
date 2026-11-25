@@ -224,7 +224,7 @@ Fix these in `docs/SPEC.md` before more work packages start. Details are in the 
   for one operation after a user "Accept". Case (c) is built on the branch (2026-11-13): the
   config flag is removed, no builder passes an agreement flag, `agreements_required` carries
   the dialog data, and the policy `script-src 'self'` is set. The `consent` option and the
-  consent dialog are not built; they are F4. SPEC §7, WP5, gives the order. The UI part
+  consent dialog are built in F4 (2026-11-25, PR for #45). SPEC §7, WP5, gives the order. The UI part
   (step 3) is built on `impl/6--ui-step3` (2026-11-25); #6 closes when that PR merges.
 - **A3:** ✅ spec text fixed on 2026-11-11: document status note, §3 differences, §5.4 command
   table, §7 status table, WP3 cancel text.
@@ -239,7 +239,7 @@ Fix these in `docs/SPEC.md` before more work packages start. Details are in the 
 Decided on 2026-11-11 — **A7 (phases):** the SPEC §7 order is the schedule. Update-all follows
 the MVP and headless stays in Phase 3. `docs/STRATEGY.md` §1.2 and §1.3 now agree.
 
-### F4 — Agreement consent with the link fallback (case (b) of SPEC §6.6, later) — no GitHub issue yet
+### F4 — Agreement consent with the link fallback (case (b) of SPEC §6.6) — #45, built 2026-11-25 (pull request for #45; open until merged)
 Decided on 2026-11-13: WP5 builds case (c), and case (b) follows later. The spike
 (`docs/spikes/2026-11-13-agreement-consent.md`) found that winget agreements have a label and a
 link, and no text. Until F4 is done, Store does not install a package that needs an agreement

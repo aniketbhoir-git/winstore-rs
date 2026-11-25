@@ -3,6 +3,7 @@
   import { operations } from '../lib/operations.svelte'
   import type { PackageSummary } from '../lib/types'
   import BuyInStoreButton from './BuyInStoreButton.svelte'
+  import ConsentDialog from './ConsentDialog.svelte'
   import ProgressBar from './ProgressBar.svelte'
 
   let { pkg }: { pkg: PackageSummary } = $props()
@@ -36,6 +37,16 @@
   {:else if op?.stage === 'cancelled'}
     <p class="note">Cancelled</p>
   {/if}
+{/if}
+
+{#if op?.agreement}
+  <ConsentDialog
+    packageId={pkg.id}
+    packageName={pkg.name}
+    error={op.agreement}
+    onaccept={() => operations.acceptAgreement(pkg.id)}
+    ondecline={() => operations.declineAgreement(pkg.id)}
+  />
 {/if}
 
 <style>

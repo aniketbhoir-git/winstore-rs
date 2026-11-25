@@ -10,6 +10,7 @@ import type {
   PackageDetail,
   PackageSummary,
   ProgressEvent,
+  UninstallOptions,
   SearchFailedEvent,
   SearchQuery,
   SearchResultsEvent,
@@ -53,8 +54,11 @@ export const api = {
     call<{ operation_id: string }>('start_install', { packageId, options }),
   /** Cancels any running install / uninstall / update by operation id. */
   cancelInstall: (operationId: string) => call<void>('cancel_install', { operationId }),
-  startUninstall: (packageId: string) =>
-    call<{ operation_id: string }>('start_uninstall', { packageId }),
+  startUninstall: (packageId: string, options?: UninstallOptions) =>
+    call<{ operation_id: string }>('start_uninstall', { packageId, options }),
+  /** Opens a link of the open consent dialog in the system browser (SPEC §6.6). */
+  openAgreementLink: (packageId: string, url: string) =>
+    call<void>('open_agreement_link', { packageId, url }),
   getInstallStatus: (packageId: string) =>
     call<InstallStatus>('get_install_status', { packageId }),
   /** Newest `limit` log entries for a package, oldest first. */
